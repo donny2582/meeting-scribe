@@ -33,20 +33,16 @@
 
 ## 第 0 階段：STT 引擎評估
 
-### 1. 設定金鑰與區域
+### 1. 設定金鑰與區域（設定視窗）
 
-```powershell
-.\scripts\run_dev.ps1 init-config
-.\scripts\run_dev.ps1 set-key azure_speech_key
-.\scripts\run_dev.ps1 set-key openai_api_key
-.\scripts\run_dev.ps1 show-keys
-```
+在檔案總管中**按兩下專案根目錄的 `MeetingScribe設定.cmd`**，開啟設定視窗：
 
-金鑰存在 Windows 認證管理員，畫面只顯示末 4 碼。接著編輯 `%APPDATA%\MeetingScribe\config.toml`：
+- **API 金鑰**：貼上 Azure Speech、OpenAI（及之後摘要用的 Anthropic）金鑰，按「儲存」。金鑰存在 Windows 認證管理員，畫面只顯示末 4 碼；留空表示不變更；「測試連線」可確認金鑰是否有效；「清除」會刪除已儲存的金鑰。
+- **Azure 區域**：選擇 Azure Speech 資源所在區域（例：`eastasia`），或填寫自訂端點。
+- **OpenAI 模型名稱**：預設 `gpt-4o-transcribe-diarize`，可改。
+- **API 單價**（美元／音訊小時）：請依官方價目表填寫，用來估算費用；未填時報告顯示「未設定單價」。
 
-- `[stt.azure] region`（例：`eastasia`）或 `endpoint`：Azure Speech 資源所在區域。
-- `[stt.openai] model`：預設 `gpt-4o-transcribe-diarize`，可改。
-- 兩個引擎的 `price_per_hour`（美元／音訊小時）：請依官方價目表填寫，用來估算費用；未填時報告顯示「未設定單價」。
+區域、模型、單價存在 `%APPDATA%\MeetingScribe\config.toml`。（也可以用命令列 `set-key`、`show-keys` 設定金鑰。）
 
 ### 2. 準備標準答案
 

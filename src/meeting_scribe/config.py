@@ -86,6 +86,22 @@ def init_user_config() -> Path:
     return path
 
 
+def save_user_overrides(updates: dict[str, Any], user_path: Path | None = None) -> Path:
+    """把 updates 合併寫入使用者設定檔（只寫入要覆寫的項目）。"""
+    import tomli_w
+
+    path = user_path or user_config_path()
+    current: dict[str, Any] = {}
+    if path.exists():
+        with open(path, "rb") as f:
+            current = tomllib.load(f)
+    merged = _deep_merge(current, updates)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "wb") as f:
+        tomli_w.dump(merged, f)
+    return path
+
+
 def get_secret(name: str) -> str | None:
     """讀取金鑰：環境變數優先，其次 Windows 認證管理員。"""
     env = os.environ.get(f"MEETINGSCRIBE_{name.upper()}")
@@ -104,6 +120,17 @@ def set_secret(name: str, value: str) -> None:
     import keyring
 
     keyring.set_password(KEYRING_SERVICE, name, value)
+
+
+def delete_secret(name: str) -> None:
+    """從 Windows 認證管理員刪除金鑰（不存在時忽略）。"""
+    import keyring
+    from keyring.errors import PasswordDeleteError
+
+    try:
+        keyring.delete_password(KEYRING_SERVICE, name)
+    except PasswordDeleteError:
+        pass
 
 
 def mask_secret(value: str | None) -> str:
