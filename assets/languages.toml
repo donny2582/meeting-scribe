@@ -1,0 +1,69 @@
+# 語言清單：代碼、STT 地區設定、偵測規則、贅字清單（SPEC 6.3）
+# 新增語言（例如越南文、泰文）時，只需在此新增 [scripts.*] 與 [languages.*]，不必修改主程式。
+
+[detection]
+mixed_threshold = 0.3     # 兩種語言都超過此比例時判定為「混合」
+
+# 字元系統：ranges 為 Unicode 範圍（十六進位）；unit = char（逐字計數）或 word（連續字元算一個單字）
+[scripts.han]
+unit = "char"
+ranges = ["3400-4DBF", "4E00-9FFF", "F900-FAFF", "20000-2A6DF"]
+
+[scripts.kana]
+unit = "char"
+ranges = ["3040-309F", "30A0-30FF", "31F0-31FF", "FF66-FF9F"]
+
+[scripts.hangul]
+unit = "char"
+ranges = ["AC00-D7AF", "1100-11FF", "3130-318F"]
+
+[scripts.latin]
+unit = "word"
+ranges = ["0041-005A", "0061-007A", "00C0-024F"]
+
+[languages.zh]
+name = "中文"
+stt_locale = "zh-TW"
+base = true               # 主要語言，固定勾選、不可取消
+selectable = true
+scripts = ["han"]
+threshold = 0.0
+fillers = ["呃", "嗯", "欸", "啊", "那個", "就是說", "然後然後"]
+repeat_collapse = ["對", "嗯"]   # 不放「好」：「好好處理」的「好好」是正常用詞
+
+[languages.en]
+name = "英文"
+stt_locale = "en-US"
+selectable = true
+scripts = ["latin"]
+threshold = 0.5           # 拉丁字母單字占片段字數 > 50%
+fillers = ["uh", "um", "erm", "you know", "I mean"]
+repeat_collapse = ["yeah", "okay", "yes"]
+
+[languages.ja]
+name = "日文"
+stt_locale = "ja-JP"
+selectable = true
+scripts = ["kana"]
+absorbs = ["han"]         # 判定為日文時，片段中的漢字也算日文
+threshold = 0.2           # 平假名或片假名占片段字元 > 20%
+fillers = ["えーと", "えっと", "あのー", "あの", "まあ", "えー"]
+repeat_collapse = ["はい"]
+
+[languages.ko]
+name = "韓文"
+stt_locale = "ko-KR"
+selectable = true
+scripts = ["hangul"]
+threshold = 0.3           # 韓文字母占片段字元 > 30%
+fillers = ["음", "어", "그러니까"]
+repeat_collapse = ["네"]
+
+[languages.nan]
+name = "台語"
+stt_locale = "nan-TW"
+selectable = false        # 只由引擎標記，沒有字元規則
+scripts = []
+threshold = 1.0
+fillers = []
+repeat_collapse = []

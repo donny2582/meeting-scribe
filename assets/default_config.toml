@@ -1,0 +1,62 @@
+# MeetingScribe 預設設定（出廠值）
+# 使用者設定檔位於 %APPDATA%\MeetingScribe\config.toml，只需寫入要覆寫的項目。
+# 模型名稱與 API 單價一律放在設定檔，不寫死在程式中。
+
+[general]
+output_dir = ""          # 空白＝文件\MeetingScribe\輸出
+ffmpeg_path = ""         # 空白＝依序尋找 assets\ffmpeg\ffmpeg.exe、系統 PATH
+keep_trace_comments = true
+log_transcript = false   # 日誌不記錄逐字稿內容（請勿開啟）
+
+[languages]
+default = ["zh", "en"]   # 預設會議語言：中文＋英文
+
+[stt]
+default_engine = "azure"  # 第 0 階段評估後由使用者決定
+http_timeout_sec = 3600
+retries = 3
+
+[stt.azure]
+# Azure AI Speech 快速轉錄（Fast Transcription）
+region = ""               # 例：eastasia、japaneast（必填，或改填 endpoint）
+endpoint = ""             # 例：https://<資源名稱>.cognitiveservices.azure.com ；空白時依 region 組成
+api_version = "2024-11-15"
+max_speakers = 15
+send_phrase_list = true
+max_phrases = 500
+max_duration_sec = 7200   # 單次請求的長度上限（超過時切段）
+max_file_mb = 300         # 單次請求的檔案大小上限（超過時切段）
+chunk_sec = 3600
+overlap_sec = 30
+price_per_hour = 0.0      # 美元／音訊小時；請依官方價目表填寫，用於估算費用
+
+[stt.openai]
+base_url = "https://api.openai.com/v1"
+model = "gpt-4o-transcribe-diarize"
+response_format = "diarized_json"
+send_prompt = false       # 具語者辨識的模型不一定支援 prompt，預設不送
+max_file_mb = 25
+chunk_sec = 1200          # 每段 20 分鐘，段與段重疊 30 秒
+overlap_sec = 30
+chunk_bitrate = "48k"
+price_per_hour = 0.0      # 美元／音訊小時；請依官方價目表填寫
+
+[stt.local]
+whisper_model = "large-v3"
+diarization_model = "pyannote/speaker-diarization-3.1"
+
+[llm]
+provider = "anthropic"
+summary_model = ""        # 第 2 階段設定，例：Claude 最新模型名稱
+translate_model = ""
+filler_model = ""
+temperature = 0.2
+max_chars_single_pass = 60000
+
+[benchmark]
+cer_threshold = 0.15
+speaker_error_threshold = 0.25
+glossary_hit_threshold = 0.80
+lang_accuracy_threshold = 0.90
+zh_misjudge_threshold = 0.02
+target_minutes_for_2h = 20

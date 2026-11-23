@@ -1,0 +1,30 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 打包產物
+build/
+dist/
+*.spec.bak
+
+# 工作資料與評估輸出（含錄音、逐字稿，不可納入版控）
+jobs/
+benchmark_out/
+*.m4a
+*.mp3
+*.wav
+*.mp4
+*.flac
+!tests/fixtures/*.wav
+
+# 外部執行檔
+assets/ffmpeg/*.exe
+
+# 金鑰
+.env
+*.key

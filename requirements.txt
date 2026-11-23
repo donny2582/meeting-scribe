@@ -1,0 +1,9 @@
+# 執行期相依套件
+pydantic>=2.7
+httpx>=0.27
+keyring>=25.0
+tomli-w>=1.0
+rapidfuzz>=3.9
+python-docx>=1.2
+Pillow>=10.4
+PySide6>=6.8
