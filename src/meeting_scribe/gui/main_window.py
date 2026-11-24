@@ -38,6 +38,15 @@ from meeting_scribe.gui.widgets import APP_STYLE, open_path, primary_button
 from meeting_scribe.postprocess.lang_detect import LanguageRegistry
 
 STAGE_TEXT = "目前進度：第 0 階段（引擎評估）"
+SAVE_DETAIL = (
+    "儲存的內容：\n"
+    "・金鑰：輸入後還沒按「儲存」的 API 金鑰（存在 Windows 認證管理員）\n"
+    "・服務與模型：語音轉錄服務、Azure 區域、各項工作使用的模型\n"
+    "・費用上限：每月費用上限\n"
+    "・轉錄偏好：「轉錄」分頁的引擎、會議語言、輸出資料夾\n\n"
+    "逐字稿的修改與會議資訊，請用「產出文件」分頁的「儲存修改」。"
+)
+SAVE_TIP = "儲存程式設定（Ctrl+S）\n\n" + SAVE_DETAIL
 
 
 class MainWindow(QMainWindow):
@@ -61,6 +70,11 @@ class MainWindow(QMainWindow):
         stage = QLabel(STAGE_TEXT)
         stage.setStyleSheet("color: gray;")
         h.addWidget(stage)
+        h.addSpacing(12)
+        self.save_button = primary_button("儲存程式設定")
+        self.save_button.setToolTip(SAVE_TIP)
+        self.save_button.clicked.connect(lambda: self.save_settings())
+        h.addWidget(self.save_button)
 
         out = app_config.output_dir(self.cfg)
         self.transcribe = TranscribePage(self, self.cfg, out)
@@ -101,12 +115,8 @@ class MainWindow(QMainWindow):
             b.clicked.connect(fn)
             bottom.addWidget(b)
         bottom.addStretch(1)
-        self.save_button = primary_button("儲存設定")
-        self.save_button.setToolTip("儲存金鑰、區域與模型設定，以及「轉錄」分頁的選擇（Ctrl+S）")
-        self.save_button.clicked.connect(lambda: self.save_settings())
         quit_button = QPushButton("結束")
         quit_button.clicked.connect(self.close)
-        bottom.addWidget(self.save_button)
         bottom.addWidget(quit_button)
         QShortcut(QKeySequence.StandardKey.Save, self, activated=lambda: self.save_settings())
 
@@ -193,7 +203,7 @@ class MainWindow(QMainWindow):
             self.keys.budget_limit.setFocus()
             QMessageBox.warning(self, "已達費用上限",
                                 f"本月估計費用 US$ {budget.used:.2f} 已達上限 US$ {budget.limit:.2f}，"
-                                "已停止新的工作。\n\n如需繼續，請在「API 金鑰」分頁的「3. 費用」提高上限後按「儲存設定」。")
+                                "已停止新的工作。\n\n如需繼續，請在「API 金鑰」分頁的「3. 費用」提高上限後按右上角「儲存程式設定」。")
             return None
         if engines and budget.warning:
             self.statusBar().showMessage(
@@ -234,10 +244,10 @@ class MainWindow(QMainWindow):
         except Exception as exc:  # noqa: BLE001 - 顯示給使用者
             QMessageBox.critical(self, "儲存失敗", f"無法儲存設定：{exc}")
             return False
-        msg = "設定已儲存" + (f"；已更新 {len(saved_keys)} 把金鑰" if saved_keys else "")
+        msg = "程式設定已儲存" + (f"；已更新 {len(saved_keys)} 把金鑰" if saved_keys else "")
         self.statusBar().showMessage(msg, 5000)
         if not quiet:
-            QMessageBox.information(self, "儲存設定", msg + "。")
+            QMessageBox.information(self, "儲存程式設定", msg + "。\n\n" + SAVE_DETAIL)
         return True
 
     def _settings_updates(self) -> dict[str, Any]:

@@ -408,7 +408,7 @@ class KeysPage(QWidget):
                 picker.add_option(opt.id, opt.note)
         self.fetched[kind] = [{"id": o.id, "label": o.label} for o in found]
         msg = f"服務目前提供 {len(found)} 個模型，新增 {added} 個到下拉選單。" if found else "服務沒有回傳可用的模型。"
-        QMessageBox.information(self, "更新模型清單", msg + "\n按「儲存設定」後會記住這份清單。")
+        QMessageBox.information(self, "更新模型清單", msg + "\n按右上角「儲存程式設定」後會記住這份清單。")
 
     def _task_grid(self, provider: str, cfg: dict[str, Any]) -> QWidget:
         """「每項工作用哪個模型」：工作名稱｜模型下拉選單＋「＋」，下方灰字為建議與每場費用。"""
