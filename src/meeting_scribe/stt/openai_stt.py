@@ -118,6 +118,7 @@ class OpenAISttEngine(SttEngine):
                 report,
                 bitrate=self.engine_cfg.get("chunk_bitrate", "48k"),
                 force_export=True,
+                checkpoint_dir=work_dir,
             )
         return SttResult(
             engine=self.name,

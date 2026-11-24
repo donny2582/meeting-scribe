@@ -130,23 +130,39 @@ def localize_result(
     cfg: dict[str, Any],
     glossary: list[GlossaryEntry] | None = None,
     progress: ProgressFn | None = None,
+    checkpoint_file: Path | None = None,
 ) -> SttResult:
-    """對轉錄結果的中文片段做臺灣在地化，回傳新的 SttResult。"""
+    """對轉錄結果的中文片段做臺灣在地化，回傳新的 SttResult。
+
+    checkpoint_file：每完成一批就存檔（片段編號 → 原文與校潤結果）。中斷後再執行時，
+    原文相同的批次直接沿用、不再呼叫 AI，只補做剩下的批次。
+    """
+    from meeting_scribe import checkpoint
+
     max_chars = int(cfg.get("llm", {}).get("localize_batch_chars", 3000))
     system = SYSTEM_PROMPT + "\n\n" + build_reference(load_term_map(), glossary or [])
 
     items = [(f"S{i:04d}", s.text) for i, s in enumerate(result.segments) if _is_chinese(s)]
     batches = _batches(items, max_chars)
+    saved: dict[str, dict[str, str]] = (checkpoint.read_json(checkpoint_file) or {}) if checkpoint_file else {}
     updated: dict[str, str] = {}
-    failed = 0
+    failed = reused = 0
     for n, batch in enumerate(batches, start=1):
+        if all(saved.get(sid, {}).get("src") == text for sid, text in batch):
+            updated.update({sid: saved[sid]["out"] for sid, _ in batch})
+            reused += 1
+            continue
         if progress:
             progress(100.0 * (n - 1) / max(len(batches), 1), f"AI 臺灣在地化中（第 {n}/{len(batches)} 批）")
         user = "請校潤以下片段：\n" + _to_json(batch)
         for attempt in (1, 2):
             try:
                 data = llm.complete_json(system, user, SCHEMA, task="localize")
-                updated.update(validate_batch(batch, data))
+                done = validate_batch(batch, data)
+                updated.update(done)
+                if checkpoint_file:
+                    saved.update({sid: {"src": text, "out": done[sid]} for sid, text in batch})
+                    checkpoint.write_json(checkpoint_file, saved)
                 break
             except LLMError as exc:
                 if exc.fatal:
@@ -155,7 +171,8 @@ def localize_result(
                     failed += 1
                     log.warning("在地化第 %d 批未通過驗證，保留 OpenCC 結果：%s", n, exc)
     if progress:
-        progress(100.0, "AI 臺灣在地化完成")
+        msg = f"AI 臺灣在地化完成（{reused} 批沿用先前結果）" if reused else "AI 臺灣在地化完成"
+        progress(100.0, msg)
 
     segments = [
         s.model_copy(update={"text": updated.get(f"S{i:04d}", s.text)}) for i, s in enumerate(result.segments)
@@ -167,6 +184,25 @@ def localize_result(
         "needs_zh_tw_localization": failed > 0,
         "localized_by": f"{llm.name} {llm.model_for('localize')}",
     })
+
+
+def apply_checkpoint(result: SttResult, checkpoint_file: Path | None) -> tuple[SttResult, int, int]:
+    """中斷時：把已存檔的批次套回結果。回傳（結果, 已完成段數, 中文段數）；仍標記為未完成在地化。"""
+    from meeting_scribe import checkpoint
+
+    saved = (checkpoint.read_json(checkpoint_file) or {}) if checkpoint_file else {}
+    total = sum(1 for s in result.segments if _is_chinese(s))
+    done = 0
+    segments = []
+    for i, s in enumerate(result.segments):
+        item = saved.get(f"S{i:04d}")
+        if item and item.get("src") == s.text:
+            segments.append(s.model_copy(update={"text": item["out"]}))
+            done += 1
+        else:
+            segments.append(s)
+    partial = result.model_copy(update={"segments": segments, "needs_zh_tw_localization": True})
+    return partial, done, total
 
 
 def _to_json(batch: list[tuple[str, str]]) -> str:

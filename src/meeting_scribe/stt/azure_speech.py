@@ -132,6 +132,7 @@ class AzureSpeechEngine(SttEngine):
             segs, raws = self._run_chunked(
                 audio_path, duration, chunk_sec, float(self.engine_cfg.get("overlap_sec", 30)),
                 Path(tmp), ".flac", lambda p: self._transcribe_file(p, key, definition), report,
+                checkpoint_dir=work_dir,
             )
         return SttResult(
             engine=self.name,

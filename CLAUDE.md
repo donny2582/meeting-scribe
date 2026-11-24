@@ -41,3 +41,8 @@
 - **費用上限與使用量**（API 金鑰分頁「3. 費用」）：每次雲端呼叫都要記到 `usage.py`（STT 用 record_stt、
   LLM 用 record_llm，指定 task）；開始新工作前檢查 `[budget] monthly_limit_usd`，達上限就停止。
   模型 token 單價在 `assets/model_catalog.toml`（price_in／price_out）。新增 LLM 呼叫時務必記錄用量。
+- **中斷續跑（使用者明確要求：餘額不足等中斷時不可全部遺失或從頭開始）**：`checkpoint.py` 的暫存
+  （`%LOCALAPPDATA%\MeetingScribe\cache\{錄音指紋}\{引擎}_{設定指紋}\`）。已付費的結果一完成就存檔：
+  轉錄結果（stt_result.json）、分段（chunks/）、Soniox 已送出的工作（soniox_job_*.json，伺服器完成就取回不重送）、
+  在地化每批（localize.json）。中斷時保留已完成部分並在訊息說明「再按開始轉錄會從中斷處繼續、不重複計費」。
+  **第 2 階段之後新增的 AI 步驟（刪贅字、翻譯、摘要）也必須照這個模式逐批存檔、可續跑。**

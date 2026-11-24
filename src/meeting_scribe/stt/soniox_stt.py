@@ -41,6 +41,10 @@ log = logging.getLogger(__name__)
 _SENTENCE_END = re.compile(r"[。！？!?.]\s*$")
 
 
+class _JobFailed(SttError):
+    """Soniox 伺服器回報這個轉錄工作失敗（無法續跑）。"""
+
+
 def tokens_to_segments(
     tokens: list[dict[str, Any]], max_gap_sec: float = 1.0, soft_max_sec: float = 15.0
 ) -> list[RawSegment]:
@@ -177,7 +181,7 @@ class SonioxSttEngine(SttEngine):
             if status == "completed":
                 return
             if status == "error":
-                raise SttError(f"Soniox 轉錄失敗：{data.get('error_type')}：{data.get('error_message')}")
+                raise _JobFailed(f"Soniox 轉錄失敗：{data.get('error_type')}：{data.get('error_message')}")
             if time.monotonic() > deadline:
                 raise SttError("Soniox 等候逾時，請稍後再試或調高設定中的 max_wait_sec")
             report(50 if status == "processing" else 10, f"Soniox {labels.get(status, status)}…")
@@ -194,21 +198,56 @@ class SonioxSttEngine(SttEngine):
     # ---- 介面 ----
     def _transcribe_file(self, path: Path, key: str, locales: list[str], phrases: list[str],
                          report: ProgressCallback) -> tuple[list[RawSegment], dict]:
+        """上傳 → 建立轉錄 → 等候 → 取回。
+
+        送出後立刻把工作編號存到 ``soniox_job_*.json``：如果之後網路中斷、取消或程式關閉，
+        下次執行會先查這個工作——伺服器已完成就直接取回結果，不會重新上傳、重複計費。
+        只有在取回成功、或伺服器回報工作失敗時，才刪除 Soniox 上的資料與工作紀錄。
+        """
+        from meeting_scribe import checkpoint
+
         if not self.engine_cfg.get("model"):
-            raise SttError("尚未設定 Soniox 模型名稱：請在「服務與費用」分頁填寫")
+            raise SttError("尚未設定 Soniox 模型名稱：請在「API 金鑰」分頁選擇")
+        job_dir = getattr(self, "_job_dir", None)
+        job_file = job_dir / f"soniox_job_{path.stem}.json" if job_dir else None
+        job = checkpoint.read_json(job_file) if job_file else None
         file_id: str | None = None
         tid: str | None = None
+        done = False
         try:
-            report(5, "上傳音訊到 Soniox…")
-            file_id = self._upload(path, key)
-            resp = self._request("POST", "/transcriptions", key, "建立轉錄",
-                                 json=self._payload(file_id, locales, phrases))
-            tid = str(resp.json()["id"])
-            self._wait(tid, key, report)
+            if job and job.get("transcription_id"):
+                tid, file_id = str(job["transcription_id"]), job.get("file_id")
+                report(5, "找到先前送出的 Soniox 工作，確認是否已完成（不重新上傳）…")
+                try:
+                    self._wait(tid, key, report)
+                except _JobFailed:
+                    raise
+                except SttError:  # 工作已不存在（例如超過 30 天被刪除）→ 重新送出
+                    log.info("先前的 Soniox 工作已不存在，重新送出")
+                    tid = file_id = None
+                    if job_file:
+                        job_file.unlink(missing_ok=True)
+            if tid is None:
+                report(5, "上傳音訊到 Soniox…")
+                file_id = self._upload(path, key)
+                resp = self._request("POST", "/transcriptions", key, "建立轉錄",
+                                     json=self._payload(file_id, locales, phrases))
+                tid = str(resp.json()["id"])
+                if job_file:
+                    checkpoint.write_json(job_file, {"file_id": file_id, "transcription_id": tid})
+                self._wait(tid, key, report)
             data = self._request("GET", f"/transcriptions/{tid}/transcript", key, "取得結果").json()
+            done = True
+        except _JobFailed:
+            done = True  # 伺服器端失敗，無法續跑：清除後重新送出
+            raise
         finally:
-            if self.engine_cfg.get("delete_after", True):
-                self._cleanup(key, tid, file_id)
+            submitted = job_file is not None and job_file.exists()
+            if done or not submitted:  # 尚未成功送出（例如上傳時餘額不足）也要清掉已上傳的檔案
+                if self.engine_cfg.get("delete_after", True):
+                    self._cleanup(key, tid, file_id)
+                if job_file:
+                    job_file.unlink(missing_ok=True)
         segs = tokens_to_segments(data.get("tokens", []), float(self.engine_cfg.get("segment_gap_sec", 1.0)))
         if self.engine_cfg.get("convert_zh_tw", True):
             segs = convert_chinese_segments(segs)
@@ -227,6 +266,7 @@ class SonioxSttEngine(SttEngine):
         if not key:
             raise SttError("尚未設定 Soniox API 金鑰：請在「API 金鑰」分頁輸入")
         report = self._progress(progress)
+        self._job_dir = work_dir
         t0 = time.perf_counter()
         duration = probe_duration(audio_path, self.ffmpeg)
         max_dur = float(self.engine_cfg.get("max_duration_sec", 18000))
@@ -236,6 +276,7 @@ class SonioxSttEngine(SttEngine):
             segs, raws = self._run_chunked(
                 audio_path, duration, chunk_sec, float(self.engine_cfg.get("overlap_sec", 30)), Path(tmp),
                 ".flac", lambda p: self._transcribe_file(p, key, locales, phrases, report), report,
+                checkpoint_dir=work_dir,
             )
         convert = bool(self.engine_cfg.get("convert_zh_tw", True))
         return SttResult(

@@ -126,7 +126,7 @@ def test_localize_if_possible_keeps_result_on_failure(monkeypatch: pytest.Monkey
     messages: list[str] = []
     out = tasks.localize_if_possible(_result(), load_config(), [], lambda p, m: messages.append(m))
     assert out.segments[0].text == "請公路局在後面發表數據"
-    assert any("失敗" in m for m in messages)
+    assert any("未完成" in m and "不會重複計費" in m for m in messages)
 
 
 class _FakeMessages:

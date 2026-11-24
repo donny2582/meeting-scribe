@@ -73,37 +73,64 @@ def transcribe_audio(
     num_speakers: int | None = None,
     progress: ProgressCallback | None = None,
     cancel: CancelCheck | None = None,
+    use_cache: bool = True,
 ) -> SttResult:
-    """前處理＋語音轉文字。"""
-    from meeting_scribe import usage
+    """前處理＋語音轉文字（＋需要時的 AI 臺灣在地化）。
+
+    中斷續跑（use_cache=True）：前處理音訊、轉錄結果、分段結果、在地化批次都存在
+    ``checkpoint`` 暫存；同一個檔案、同一組設定再執行時，已完成（已付費）的部分直接沿用。
+    work_dir 只在 use_cache=False（引擎評估要重新量測）時使用。
+    """
+    from meeting_scribe import checkpoint, usage
 
     report = _guard(progress, cancel)
     usage.check_budget(cfg)  # 本月費用已達上限時不開始
     ffmpeg = find_ffmpeg(cfg)
-    work_dir.mkdir(parents=True, exist_ok=True)
-    flac = work_dir / f"{audio.stem}.flac"
+    entries = load_glossaries(glossaries)
+    phrases = stt_phrases(entries, langs)
+    locales = registry.locales_for(langs)
+    if use_cache:
+        if not audio.is_file():
+            from meeting_scribe.audio.preprocess import AudioError
+
+            raise AudioError(f"找不到檔案：{audio}")
+        base = checkpoint.audio_dir(audio)
+        checkpoint.touch(base)
+        run = checkpoint.run_dir(audio, engine_name, cfg, locales, phrases, num_speakers)
+    else:
+        base = run = work_dir
+    base.mkdir(parents=True, exist_ok=True)
+    run.mkdir(parents=True, exist_ok=True)
+    flac = base / "audio.flac"
     if not flac.exists():
         report(0, f"音訊前處理中：{audio.name}")
         tmp = flac.with_suffix(".tmp.flac")
         preprocess_audio(audio, tmp, ffmpeg)
         tmp.replace(flac)
-    report(0, "準備語音轉文字")
+
+    stt_file = run / "stt_result.json"
     engine = create_engine(engine_name, cfg, ffmpeg)
-    entries = load_glossaries(glossaries)
-    phrases = stt_phrases(entries, langs)
-    report(0, f"{engine.display_name}：語言 {'、'.join(registry.languages[c].name for c in langs)}，"
-              f"提示詞彙 {len(phrases)} 個")
-    result = engine.transcribe(flac, registry.locales_for(langs), phrases, num_speakers, report, work_dir)
-    usage.record_stt(usage.SERVICE_NAMES.get(engine_name, engine_name), result.engine_version,
-                     result.audio_duration, engine.price_per_hour())
+    if use_cache and stt_file.exists():
+        result = SttResult.model_validate_json(stt_file.read_text(encoding="utf-8"))
+        report(100, "沿用先前已完成的語音轉錄（不會重複計費）")
+    else:
+        report(0, f"{engine.display_name}：語言 {'、'.join(registry.languages[c].name for c in langs)}，"
+                  f"提示詞彙 {len(phrases)} 個")
+        result = engine.transcribe(flac, locales, phrases, num_speakers, report, run)
+        stt_file.write_text(result.model_dump_json(indent=1), encoding="utf-8")  # 轉錄一完成就存檔
+        usage.record_stt(usage.SERVICE_NAMES.get(engine_name, engine_name), result.engine_version,
+                         result.audio_duration, engine.price_per_hour())
     if result.needs_zh_tw_localization:
-        result = localize_if_possible(result, cfg, entries, report)
+        result = localize_if_possible(result, cfg, entries, report, run / "localize.json")
     return result
 
 
 def localize_if_possible(result: SttResult, cfg: dict[str, Any], entries: list[Any],
-                         report: ProgressCallback) -> SttResult:
-    """有文字整理服務的金鑰時，立即由 AI 做臺灣繁體在地化；沒有金鑰或失敗時保留自動繁體轉換的結果。"""
+                         report: ProgressCallback, checkpoint_file: Path | None = None) -> SttResult:
+    """有文字整理服務的金鑰時，立即由 AI 做臺灣繁體在地化；沒有金鑰或失敗時保留自動繁體轉換的結果。
+
+    checkpoint_file：每一批完成就存檔；中斷（例如餘額不足）時保留已完成的批次，下次只補做剩下的。
+    """
     from meeting_scribe import usage
     from meeting_scribe.llm import LLM_PROVIDERS, LLMError, create_llm, provider_of
 
@@ -114,14 +141,20 @@ def localize_if_possible(result: SttResult, cfg: dict[str, Any], entries: list[A
     if usage.budget_status(cfg).exceeded:
         report(100, "本月費用已達上限：中文只做自動繁體轉換，未做 AI 臺灣在地化")
         return result
-    from meeting_scribe.postprocess.localize import localize_result
+    from meeting_scribe.postprocess.localize import apply_checkpoint, localize_result
 
     try:
-        return localize_result(result, create_llm(cfg), cfg, entries, report)
+        return localize_result(result, create_llm(cfg), cfg, entries, report, checkpoint_file)
     except LLMError as exc:
-        log.error("臺灣在地化失敗：%s", exc)
-        report(100, f"AI 臺灣在地化失敗（已保留自動繁體轉換的結果）：{exc}")
-        return result
+        log.error("臺灣在地化中斷：%s", exc)
+        partial, done, total = apply_checkpoint(result, checkpoint_file)
+        if done:
+            report(100, f"AI 臺灣在地化中斷（{exc}）：已完成 {done}/{total} 段並保存；補足餘額後，"
+                        "對同一個錄音檔再按「開始轉錄」會從中斷處繼續，語音轉錄不會重複計費。")
+        else:
+            report(100, f"AI 臺灣在地化未完成（{exc}），已保留自動繁體轉換的結果；"
+                        "之後對同一個錄音檔再按「開始轉錄」即可補做，語音轉錄不會重複計費。")
+        return partial
 
 
 def load_or_transcribe(cache: Path, reuse: bool, progress: ProgressCallback | None = None,
@@ -173,6 +206,9 @@ def run_transcribe_job(
     progress: ProgressCallback | None = None, cancel: CancelCheck | None = None,
 ) -> TranscribeOutput:
     """轉錄並輸出到「輸出資料夾\\{日期時間}_{檔名}_{引擎}」。"""
+    from meeting_scribe import checkpoint
+
+    checkpoint.purge_old()
     folder = out_root / f"{datetime.now():%Y%m%d_%H%M}_{audio.stem}_{engine_name}"
     result = transcribe_audio(engine_name, audio, langs, glossaries, cfg, registry, folder / "_work",
                               num_speakers, progress, cancel)
@@ -238,7 +274,7 @@ def run_benchmark(
 
         try:
             common = {"engine_name": name, "glossaries": glossaries, "cfg": cfg, "registry": registry,
-                          "work_dir": work, "cancel": cancel}
+                          "work_dir": work, "cancel": cancel, "use_cache": False}  # 評估要重新量測處理時間
             result = load_or_transcribe(work / f"{audio.stem}_{name}.json", reuse, sub,
                                         audio=audio, langs=langs, **common)
             lang_result = None

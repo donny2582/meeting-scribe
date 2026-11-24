@@ -85,13 +85,17 @@ class SttEngine(ABC):
         progress: ProgressCallback,
         bitrate: str | None = None,
         force_export: bool = False,
+        checkpoint_dir: Path | None = None,
     ) -> tuple[list[RawSegment], list[dict]]:
         """切段（必要時）→ 逐段辨識 → 跨段串接講者。
 
         Args:
             transcribe_file: 辨識單一檔案，回傳（段內相對時間的片段, 原始回應）。
             force_export: 只有一段時也重新匯出（例如轉成較小的 mp3）。
+            checkpoint_dir: 每完成一段就存到 ``checkpoint_dir\\chunks``；中斷（例如餘額不足）後再執行時，
+                已完成的段落直接沿用，從下一段繼續，不會重複計費。
         """
+        from meeting_scribe import checkpoint
         from meeting_scribe.audio.preprocess import export_chunk
         from meeting_scribe.stt.chunk_merge import merge_chunk_results, plan_chunks
 
@@ -99,6 +103,15 @@ class SttEngine(ABC):
         results = []
         raws: list[dict] = []
         for span in spans:
+            saved_path = checkpoint_dir / "chunks" / f"chunk_{span.index:03d}.json" if checkpoint_dir else None
+            saved = checkpoint.read_json(saved_path) if saved_path else None
+            if saved and abs(saved.get("start", -1) - span.start) < 0.01 and abs(saved.get("end", -1) - span.end) < 0.01:
+                segs = [RawSegment.model_validate(s) for s in saved["segments"]]
+                results.append((span, segs))
+                raws.append({"chunk": span.index, "offset": span.start, "response": saved.get("raw", {})})
+                progress(100.0 * (span.index + 1) / len(spans),
+                         f"沿用已完成的第 {span.index + 1}/{len(spans)} 段（不重複計費）")
+                continue
             progress(100.0 * span.index / len(spans), f"語音轉文字中（第 {span.index + 1}/{len(spans)} 段）")
             if len(spans) == 1 and not force_export:
                 path = audio_path
@@ -107,7 +120,16 @@ class SttEngine(ABC):
                     audio_path, work_dir / f"chunk_{span.index:03d}{suffix}", self.ffmpeg,
                     span.start, span.duration, bitrate,
                 )
-            segs, raw = transcribe_file(path)
+            try:
+                segs, raw = transcribe_file(path)
+            except SttError as exc:
+                if len(spans) > 1 and span.index > 0 and checkpoint_dir:
+                    raise SttError(f"{exc}（已完成並保存 {span.index}/{len(spans)} 段；補足餘額後再按「開始轉錄」，"
+                                   f"會從第 {span.index + 1} 段繼續，已完成的部分不會重複計費）") from exc
+                raise
+            if saved_path:
+                checkpoint.write_json(saved_path, {"start": span.start, "end": span.end, "raw": raw,
+                                                   "segments": [s.model_dump() for s in segs]})
             results.append((span, segs))
             raws.append({"chunk": span.index, "offset": span.start, "response": raw})
             log.info("%s 第 %d/%d 段完成，%d 個片段", self.name, span.index + 1, len(spans), len(segs))

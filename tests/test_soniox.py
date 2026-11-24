@@ -125,7 +125,39 @@ def test_soniox_cancel_during_polling(setup: dict[str, Any]) -> None:
 
     with pytest.raises(Cancelled):
         engine.transcribe(setup["audio"], ["zh-TW"], [], progress=progress, work_dir=setup["audio"].parent)
-    assert len(setup["deleted"]) == 2  # 取消時也清除
+    assert setup["deleted"] == []  # 取消時保留伺服器上的工作，下次可以直接取回
+    assert (setup["audio"].parent / "soniox_job_a.json").exists()
+
+
+def test_soniox_resumes_submitted_job_without_reupload(setup: dict[str, Any]) -> None:
+    from meeting_scribe import checkpoint
+
+    job = setup["audio"].parent / "soniox_job_a.json"
+    checkpoint.write_json(job, {"file_id": "file-1", "transcription_id": "tr-1"})
+    setup["mp"].setattr(httpx, "request", _router(setup["calls"], ["completed"]))
+    engine = create_engine("soniox", setup["cfg"], Path("ffmpeg"))
+    result = engine.transcribe(setup["audio"], ["zh-TW"], [], work_dir=setup["audio"].parent)
+    urls = [c[1] for c in setup["calls"]]
+    assert not any(u.endswith("/files") for u in urls)  # 沒有重新上傳
+    assert not any(u.endswith("/transcriptions") for u in urls)  # 沒有重新建立（不會重複計費）
+    assert result.segments[0].text == "這個軟體"
+    assert not job.exists() and len(setup["deleted"]) == 2  # 取回後才清除
+
+
+def test_soniox_upload_balance_error_cleans_up(setup: dict[str, Any]) -> None:
+    def request(method: str, url: str, **kwargs: Any) -> httpx.Response:
+        setup["calls"].append((method, url, None))
+        req = httpx.Request(method, url)
+        if url.endswith("/files"):
+            return httpx.Response(201, json={"id": "file-1"}, request=req)
+        return httpx.Response(402, json={"error_type": "organization_balance_exhausted"}, request=req)
+
+    setup["mp"].setattr(httpx, "request", request)
+    engine = create_engine("soniox", setup["cfg"], Path("ffmpeg"))
+    with pytest.raises(SttError, match="餘額不足"):
+        engine.transcribe(setup["audio"], ["zh-TW"], [], work_dir=setup["audio"].parent)
+    assert any(u.endswith("/files/file-1") for u in setup["deleted"])  # 已上傳的檔案清掉
+    assert not (setup["audio"].parent / "soniox_job_a.json").exists()
 
 
 def test_soniox_balance_exhausted(setup: dict[str, Any]) -> None:
