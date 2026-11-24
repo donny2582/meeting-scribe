@@ -53,6 +53,7 @@ class MeetingInfo(BaseModel):
     want_conclusion: bool = True
     want_action_table: bool = False
     want_mindmap: bool = False
+    clean_fillers: bool = True  # 產出的逐字稿刪除贅字（只刪不改；畫面上的原文不變）
 
 
 class TranscriptDocument(BaseModel):

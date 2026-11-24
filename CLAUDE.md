@@ -39,6 +39,8 @@
   完成後接到本分頁的「產出文件」按鈕。
 - 測試一律透過 tests/conftest.py 隔離 APPDATA 與金鑰，不得讀寫使用者真正的設定檔。
 - **與使用者一律用繁體中文溝通。**
+- **刪除贅字已提前實作**（postprocess/filler.py 的 clean_texts、tasks.clean_fillers）：「產出文件」產出 Word 前執行，
+  規則層＋AI 層（task="filler"）＋子序列驗證＋逐批存檔（工作資料夾 _work/filler.json）；原文不改，只影響輸出。
 - **語音範圍**（「轉錄」分頁，gui/audio_range.py，QtMultimedia 試聽）：只轉錄 clip＝（起點, 終點）；
   前處理用 ffmpeg -ss/-t 擷取，轉錄後所有片段時間加上起點（tasks.shift_to_clip），SttResult 記錄 clip_start／clip_end。
   暫存依範圍區分。之後任何顯示或輸出時間碼的功能都必須對應原始錄音時間，不可從 0 開始。

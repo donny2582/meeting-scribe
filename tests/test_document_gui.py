@@ -101,7 +101,8 @@ def test_edit_rename_merge_and_produce(win: Any, tmp_path: Path, monkeypatch: py
 
     assert page.last_output is not None and page.last_output.exists()
     log = page.panel.log.toPlainText()
-    for expected in ("講者命名：講者3 → 公路局", "開始：產出文件", "寫入講者對照表", "寫入逐字稿內容",
+    for expected in ("講者命名：講者3 → 公路局", "開始：產出文件", "只用規則刪除贅字", "刪除贅字完成：",
+                     "寫入講者對照表", "寫入逐字稿內容",
                      "儲存檔案：逐字稿_", "心智圖：需要 AI 整理", "輸出檔案："):
         assert expected in log, expected
     assert page.panel.status.text() == "完成" and page.panel.elapsed.text().startswith("已經過")

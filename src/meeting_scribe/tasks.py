@@ -171,6 +171,52 @@ def localize_if_possible(result: SttResult, cfg: dict[str, Any], entries: list[A
         return partial
 
 
+def clean_fillers(
+    segments: list[Any], cfg: dict[str, Any], registry: LanguageRegistry,
+    progress: ProgressCallback | None = None, cancel: CancelCheck | None = None,
+    checkpoint_file: Path | None = None,
+) -> tuple[list[Any], Any]:
+    """產出文件前刪除贅字（SPEC 6.4）：規則層＋AI 層（有金鑰且未達費用上限時），只刪不改。
+
+    回傳（清理後的片段，整段都是贅字的片段會移除；統計）。原始片段不會被修改。
+    """
+    from meeting_scribe import usage
+    from meeting_scribe.llm import LLM_PROVIDERS, LLMError, create_llm, provider_of
+    from meeting_scribe.postprocess.filler import clean_texts, remove_fillers_rule
+    from meeting_scribe.postprocess.lang_detect import detect_language
+
+    report_fn = _guard(progress, cancel)
+    base = registry.base_code
+
+    def rule(_sid: str, text: str) -> str:
+        lang = detect_language(text, registry)
+        rules = registry.languages.get(lang) or registry.languages[base]
+        out = remove_fillers_rule(text, rules.fillers, rules.repeat_collapse)
+        if lang not in (base, "mixed", "unknown"):  # 中文夾雜時也套用中文贅字
+            return out
+        zh = registry.languages[base]
+        return remove_fillers_rule(out, zh.fillers, zh.repeat_collapse)
+
+    llm = None
+    label, key_name = LLM_PROVIDERS[provider_of(cfg)]
+    if not get_secret(key_name):
+        report_fn(0, f"未設定 {label} 金鑰：只用規則刪除贅字（呃、嗯、對對對…）")
+    elif usage.budget_status(cfg).exceeded:
+        report_fn(0, "本月費用已達上限：只用規則刪除贅字")
+    else:
+        try:
+            llm = create_llm(cfg)
+            report_fn(0, f"刪除贅字：先用規則，再由 AI（{label} {llm.model_for('filler')}）處理，只刪不改")
+        except LLMError as exc:
+            report_fn(0, f"無法使用 AI（{exc}）：只用規則刪除贅字")
+    texts = [(f"S{i:05d}", s.text) for i, s in enumerate(segments)]
+    max_chars = int(cfg.get("llm", {}).get("filler_batch_chars", 3000))
+    cleaned, report = clean_texts(texts, rule, llm, max_chars, report_fn, checkpoint_file)
+    out = [s.model_copy(update={"text": cleaned[f"S{i:05d}"]}) for i, s in enumerate(segments)
+           if cleaned[f"S{i:05d}"].strip(" ，。、,.!?！？")]
+    return out, report
+
+
 def load_or_transcribe(cache: Path, reuse: bool, progress: ProgressCallback | None = None,
                        **kwargs: Any) -> SttResult:
     """有快取且 reuse=True 時沿用，否則轉錄並寫入快取。"""

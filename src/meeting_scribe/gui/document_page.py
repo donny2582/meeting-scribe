@@ -210,6 +210,16 @@ class DocumentPage(QWidget):
             items.addWidget(cb)
         items.addStretch(1)
         v.addLayout(items)
+        clean_row = QHBoxLayout()
+        clean_row.addSpacing(12)
+        self.want_clean = QCheckBox("刪除贅字（呃、嗯、那個、對對對、重複的字…；只刪不改）")
+        self.want_clean.setChecked(True)
+        self.want_clean.setToolTip("先用規則刪除，再由 AI（「API 金鑰」分頁的「刪除贅字」模型，預設 Haiku 5.5，每場約 US$0.03）"
+                                   "處理；AI 的結果必須只刪字、不能加字或換順序，否則改用規則結果。\n"
+                                   "只影響產出的 Word 檔，畫面上的原文不變。")
+        clean_row.addWidget(self.want_clean)
+        clean_row.addStretch(1)
+        v.addLayout(clean_row)
         v.addWidget(hint("會議紀錄（討論事項、結論、待辦事項表）與心智圖需要 AI 整理討論內容，"
                          "第 2、3 階段完成後產出；目前先產出逐字稿 .docx，這裡的選擇會先存起來。"))
         lay.addWidget(self.output_box)
@@ -264,7 +274,8 @@ class DocumentPage(QWidget):
         self.date.dateChanged.connect(self._mark_dirty)
         self.start.timeChanged.connect(self._mark_dirty)
         self.end.timeChanged.connect(self._mark_dirty)
-        for cb in (self.want_discussion, self.want_conclusion, self.want_action_table, self.want_mindmap):
+        for cb in (self.want_discussion, self.want_conclusion, self.want_action_table, self.want_mindmap,
+                   self.want_clean):
             cb.toggled.connect(self._mark_dirty)
         self.type_group.buttonToggled.connect(lambda *_: self._mark_dirty())
         self._set_enabled(False)
@@ -347,6 +358,7 @@ class DocumentPage(QWidget):
         self.want_conclusion.setChecked(info.want_conclusion)
         self.want_action_table.setChecked(info.want_action_table)
         self.want_mindmap.setChecked(info.want_mindmap)
+        self.want_clean.setChecked(info.clean_fillers)
         self._fill_table()
         self._update_labels()
         extra = f"｜錄音 {_hms(doc.audio_duration)}" if doc.audio_duration and doc.has_timecodes else ""
@@ -508,6 +520,7 @@ class DocumentPage(QWidget):
             want_conclusion=self.want_conclusion.isChecked(),
             want_action_table=self.want_action_table.isChecked(),
             want_mindmap=self.want_mindmap.isChecked(),
+            clean_fillers=self.want_clean.isChecked(),
         )
 
     def save(self, quiet: bool = True) -> bool:
@@ -547,9 +560,27 @@ class DocumentPage(QWidget):
                                           or self.want_conclusion.isChecked() or self.want_action_table.isChecked()),
                                          ("心智圖", self.want_mindmap.isChecked())) if on]
         self.result_label.setText("")
+        clean = self.want_clean.isChecked()
+        cfg = self.host.cfg
+        registry = self.host.registry
 
         def work(progress: Any, cancel: Any) -> Path:
+            from meeting_scribe import tasks
+
             progress(0, f"已儲存會議資訊與修改（{len(doc.segments)} 段、{len(doc.speakers())} 位講者）")
+            if clean:
+                before = sum(len(s.text) for s in doc.segments)
+                doc.segments, rep = tasks.clean_fillers(doc.segments, cfg, registry, progress, cancel,
+                                                        Path(doc.folder) / "_work" / "filler.json")
+                after = sum(len(s.text) for s in doc.segments)
+                detail = (f"AI 處理 {rep.ai_batches} 批" + (f"、沿用先前 {rep.reused_batches} 批" if rep.reused_batches else "")
+                          + (f"、{rep.ai_rejected} 段 AI 結果未通過驗證改用規則" if rep.ai_rejected else "")
+                          if rep.ai_used else "只用規則")
+                progress(0, f"刪除贅字完成：{before:,} 字 → {after:,} 字（少了 {before - after:,} 字）；"
+                            f"{detail}；整段都是贅字而移除 {rep.dropped} 段")
+                if rep.ai_error:
+                    progress(0, f"AI 刪除贅字中斷（{rep.ai_error}），其餘段落已用規則處理；"
+                                "補足後再按「產出文件」，已完成的批次不會重複計費")
             path = render_transcript(doc, out_dir, progress=progress)
             for name in pending:
                 progress(100, f"{name}：需要 AI 整理，第 2、3 階段完成後產出（本次略過）")
