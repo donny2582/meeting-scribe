@@ -76,13 +76,22 @@ def output_dir(cfg: dict[str, Any]) -> Path:
     return Path(configured) if configured else documents_dir() / APP_NAME / "輸出"
 
 
+def default_glossary_names() -> set[str]:
+    """程式內建的預設詞庫名稱（例：道安業務），不可刪除。"""
+    return {p.stem.removeprefix("seed_") for p in (assets_dir() / "glossary").glob("seed_*.csv")}
+
+
 def user_glossary_dir() -> Path:
-    """使用者詞庫資料夾 ``%APPDATA%\\MeetingScribe\\glossary``；第一次使用時複製初始詞庫。"""
+    """使用者詞庫資料夾 ``%APPDATA%\\MeetingScribe\\glossary``。
+
+    預設詞庫不存在時（第一次使用，或在檔案總管被刪除）自動從初始詞庫複製；已存在則不覆蓋，保留使用者累積的內容。
+    """
     path = appdata_dir() / "glossary"
-    if not path.exists():
-        path.mkdir(parents=True, exist_ok=True)
-        for seed in (assets_dir() / "glossary").glob("seed_*.csv"):
-            shutil.copyfile(seed, path / seed.name.removeprefix("seed_"))
+    path.mkdir(parents=True, exist_ok=True)
+    for seed in (assets_dir() / "glossary").glob("seed_*.csv"):
+        target = path / seed.name.removeprefix("seed_")
+        if not target.exists():
+            shutil.copyfile(seed, target)
     return path
 
 

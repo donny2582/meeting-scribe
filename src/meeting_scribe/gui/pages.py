@@ -38,7 +38,7 @@ from PySide6.QtWidgets import (
 )
 
 from meeting_scribe import tasks
-from meeting_scribe.config import user_glossary_dir
+from meeting_scribe.config import default_glossary_names, user_glossary_dir
 from meeting_scribe.gui.settings import ENGINES
 from meeting_scribe.gui.widgets import (
     AUDIO_FILTER,
@@ -408,20 +408,24 @@ class BenchmarkPage(QWidget):
 
 
 class GlossaryPage(QWidget):
-    """「詞庫」分頁：檢視、開啟、新增、匯入詞庫 CSV（SPEC 第 8 章）。"""
+    """「詞庫」分頁：檢視、開啟、新增、匯入、刪除詞庫 CSV（SPEC 第 8 章）。
+
+    程式內建的預設詞庫（例：道安業務）不可刪除；刪除自訂詞庫時移到資源回收筒，可以還原。
+    """
 
     def __init__(self, on_changed: Any = None) -> None:
         super().__init__()
         self._on_changed = on_changed
+        self.protected = default_glossary_names()
         lay = QVBoxLayout(self)
         lay.addWidget(hint("詞庫用來提示語音辨識引擎、校正常見誤寫，並統一翻譯用字。"
                            "按「用 Excel 開啟」編輯，存檔時請保留「CSV UTF-8」格式。"
                            "欄位：" + "、".join(COLUMNS) + "；常見誤寫以「｜」分隔。"))
-        self.table = QTableWidget(0, 3)
-        self.table.setHorizontalHeaderLabels(["詞庫", "詞數", "最後修改"])
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(["詞庫", "類型", "詞數", "最後修改"])
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        for col in (1, 2):
+        for col in (1, 2, 3):
             header.setSectionResizeMode(col, QHeaderView.ResizeMode.ResizeToContents)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
@@ -439,7 +443,12 @@ class GlossaryPage(QWidget):
             b.clicked.connect(fn)
             row.addWidget(b)
         row.addStretch(1)
+        self.delete_button = QPushButton("刪除")
+        self.delete_button.setStyleSheet("QPushButton:enabled { color: #c62828; }")
+        self.delete_button.clicked.connect(self.delete_selected)
+        row.addWidget(self.delete_button)
         lay.addLayout(row)
+        self.table.itemSelectionChanged.connect(self._update_buttons)
         self.location = hint("")
         lay.addWidget(self.location)
         self.reload()
@@ -457,13 +466,15 @@ class GlossaryPage(QWidget):
             except (OSError, UnicodeDecodeError, csv.Error):
                 count = "無法讀取"
             mtime = datetime.fromtimestamp(path.stat().st_mtime).strftime("%Y-%m-%d %H:%M")
-            for c, text in enumerate((path.stem, count, mtime)):
+            kind = "🔒 預設（不可刪除）" if self.is_protected(path) else "自訂"
+            for c, text in enumerate((path.stem, kind, count, mtime)):
                 item = QTableWidgetItem(text)
                 item.setData(Qt.ItemDataRole.UserRole, str(path))
                 self.table.setItem(r, c, item)
         if paths and self.table.currentRow() < 0:
             self.table.selectRow(0)
         self.location.setText(f"詞庫位置：{user_glossary_dir()}")
+        self._update_buttons()
         if self._on_changed:
             self._on_changed()
 
@@ -471,6 +482,48 @@ class GlossaryPage(QWidget):
         row = self.table.currentRow()
         item = self.table.item(row, 0) if row >= 0 else None
         return Path(item.data(Qt.ItemDataRole.UserRole)) if item else None
+
+    def is_protected(self, path: Path) -> bool:
+        """是否為程式內建的預設詞庫。"""
+        return path.stem in self.protected
+
+    def _update_buttons(self) -> None:
+        path = self.selected()
+        protected = path is not None and self.is_protected(path)
+        self.delete_button.setEnabled(path is not None and not protected)
+        self.delete_button.setToolTip(
+            f"「{path.stem}」是預設詞庫，不可刪除。" if protected and path
+            else "把選取的詞庫移到資源回收筒（可以還原）。"
+        )
+
+    def delete_selected(self) -> None:
+        """刪除選取的自訂詞庫（確認後移到資源回收筒）；預設詞庫不可刪除。"""
+        from meeting_scribe.storage.trash import move_to_recycle_bin
+
+        path = self.selected()
+        if path is None:
+            return
+        if self.is_protected(path):
+            QMessageBox.information(self, "刪除詞庫", f"「{path.stem}」是預設詞庫，不可刪除。")
+            return
+        try:
+            count = len(load_glossary(path))
+        except (OSError, UnicodeDecodeError, csv.Error):
+            count = 0
+        answer = QMessageBox.question(
+            self, "刪除詞庫",
+            f"確定要刪除詞庫「{path.stem}」（{count} 個詞）嗎？\n\n檔案會移到資源回收筒，需要時可以從回收筒還原。",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            move_to_recycle_bin(path)
+        except OSError as exc:
+            QMessageBox.warning(self, "刪除詞庫", f"刪除失敗：{exc}")
+            return
+        self.table.clearSelection()
+        self.table.setCurrentCell(-1, -1)
+        self.reload()
 
     def open_selected(self) -> None:
         path = self.selected()
@@ -510,6 +563,9 @@ class GlossaryPage(QWidget):
             QMessageBox.warning(self, "匯入詞庫", "第一列必須包含「正確詞」欄位。")
             return
         dst = user_glossary_dir() / src.name
+        if self.is_protected(dst):
+            QMessageBox.warning(self, "匯入詞庫", f"「{dst.stem}」是預設詞庫的名稱，請先把檔案改名再匯入。")
+            return
         if dst.exists():
             answer = QMessageBox.question(self, "匯入詞庫", f"已經有「{dst.stem}」，要覆蓋嗎？")
             if answer != QMessageBox.StandardButton.Yes:

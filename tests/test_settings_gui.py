@@ -174,6 +174,50 @@ def test_glossary_seeded_and_new(app: QApplication, env: dict[str, Any], monkeyp
     win.close()
 
 
+def test_default_glossary_cannot_be_deleted(app: QApplication, env: dict[str, Any],
+                                            monkeypatch: pytest.MonkeyPatch) -> None:
+    from meeting_scribe.storage import trash
+
+    trashed: list[Path] = []
+    monkeypatch.setattr(trash, "move_to_recycle_bin", lambda p: (trashed.append(p), p.unlink()))
+    win = _window(env)
+    page = win.glossary
+    page.table.selectRow(0)
+    assert page.selected().stem == "道安業務"
+    assert "預設" in page.table.item(0, 1).text()
+    assert not page.delete_button.isEnabled()
+    page.delete_selected()  # 即使直接呼叫也不會刪
+    assert trashed == [] and page.selected().exists()
+
+    monkeypatch.setattr(QInputDialog, "getText", lambda *a, **k: ("共用", True))
+    page.new_glossary()
+    row = next(r for r in range(page.table.rowCount()) if page.table.item(r, 0).text() == "共用")
+    page.table.selectRow(row)
+    assert page.delete_button.isEnabled()
+    page.delete_selected()
+    assert [p.stem for p in trashed] == ["共用"]
+    assert page.table.rowCount() == 1
+    assert win.transcribe.glossaries.count() == 1
+    win.close()
+
+
+def test_default_glossary_restored_if_missing(env: dict[str, Any]) -> None:
+    path = app_config.user_glossary_dir() / "道安業務.csv"
+    path.write_text("正確詞\n自訂詞\n", encoding="utf-8-sig")
+    app_config.user_glossary_dir()
+    assert "自訂詞" in path.read_text(encoding="utf-8-sig")  # 已存在時不覆蓋
+    path.unlink()
+    app_config.user_glossary_dir()
+    assert path.exists()  # 被刪掉時自動補回
+
+
+def test_trash_missing_file(tmp_path: Path) -> None:
+    from meeting_scribe.storage.trash import move_to_recycle_bin
+
+    with pytest.raises(FileNotFoundError):
+        move_to_recycle_bin(tmp_path / "nope.csv")
+
+
 @pytest.mark.parametrize("status,ok,text", [(200, True, "有效"), (401, False, "金鑰無效"), (404, False, "HTTP 404")])
 def test_check_key(monkeypatch: pytest.MonkeyPatch, status: int, ok: bool, text: str) -> None:
     calls: list[str] = []
