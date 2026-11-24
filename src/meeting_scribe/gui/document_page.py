@@ -42,7 +42,7 @@ from PySide6.QtWidgets import (
 )
 
 from meeting_scribe.config import output_dir
-from meeting_scribe.gui.widgets import OK_COLOR, hint, open_path, primary_button
+from meeting_scribe.gui.widgets import OK_COLOR, RunPanel, hint, open_path, primary_button
 from meeting_scribe.render.roc_date import format_roc_date, format_roc_time, parse_hhmm, round_to_minutes
 from meeting_scribe.transcript_io import (
     DOCUMENT_FILE,
@@ -235,6 +235,11 @@ class DocumentPage(QWidget):
         self.result_label = QLabel("")
         self.result_label.setWordWrap(True)
         lay.addWidget(self.result_label)
+        # 執行紀錄：目前步驟、進度、已經過時間、逐行紀錄（與「轉錄」分頁相同）
+        self.panel = RunPanel()
+        self.panel.log.setMinimumHeight(140)
+        self.panel.busy_changed.connect(self._on_busy)
+        lay.addWidget(self.panel)
         lay.addStretch(1)
 
         area = QScrollArea()
@@ -350,6 +355,7 @@ class DocumentPage(QWidget):
         self.folder_label.setText(f"輸出位置：{Path(doc.folder) / '輸出'}")
         self.result_label.setText("")
         self._set_enabled(True)
+        self.panel.append(f"載入逐字稿：{doc.source}，{len(doc.segments)} 段、{len(doc.speakers())} 位講者")
         self._loading = False
         self._dirty = False
 
@@ -396,6 +402,7 @@ class DocumentPage(QWidget):
             return
         self.load(doc)
         self.host.statusBar().showMessage(f"已匯入 {len(doc.segments)} 段逐字稿：{path.name}", 8000)
+        self.panel.append(f"匯入逐字稿：{path.name}（{'有' if doc.has_timecodes else '沒有'}時間碼）")
 
     def open_saved(self) -> None:
         """開啟之前存的 document.json。"""
@@ -462,6 +469,7 @@ class DocumentPage(QWidget):
         if not ok:
             return
         self.doc.rename_speaker(speaker, name)
+        self.panel.append(f"講者命名：{speaker} → {name.strip() or '（取消命名）'}")
         self._fill_table()
         self._dirty = True
 
@@ -480,6 +488,7 @@ class DocumentPage(QWidget):
         self._fill_table()
         self._dirty = True
         self.host.statusBar().showMessage(f"已合併 {count} 段", 5000)
+        self.panel.append(f"合併講者：{source} 併入 {target}（{count} 段）")
 
     # ---- 儲存與產出 ----
     def collect_info(self) -> MeetingInfo:
@@ -515,15 +524,16 @@ class DocumentPage(QWidget):
         info = self.doc.info
         self.host.remember_meeting_fields(info.location, info.chair, info.recorder)
         self.host.statusBar().showMessage(f"已儲存：{path}", 6000)
+        self.panel.append(f"已儲存修改：{path.name}")
         if not quiet:
             QMessageBox.information(self, "儲存修改", f"已儲存，之後可以用「開啟已存的文件…」繼續：\n{path}")
         return True
 
     def produce(self) -> None:
-        """產出文件：目前產出逐字稿 .docx。"""
+        """產出文件（在背景執行，進度與經過時間顯示在下方執行紀錄）：目前產出逐字稿 .docx。"""
         from meeting_scribe.render.docx_transcript import render_transcript
 
-        if self.doc is None:
+        if self.doc is None or self.panel.running:
             return
         if not self.title.toPlainText().strip():
             self.title.setFocus()
@@ -531,19 +541,33 @@ class DocumentPage(QWidget):
             return
         if not self.save(quiet=True):
             return
-        try:
-            path = render_transcript(self.doc, Path(self.doc.folder) / "輸出")
-        except Exception as exc:  # noqa: BLE001 - 顯示給使用者
-            QMessageBox.critical(self, "產出文件", f"產出失敗：{exc}")
-            return
-        self.last_output = path
-        self.open_file.setEnabled(True)
-        pending = [name for name, on in (("會議紀錄", self.want_discussion.isChecked()
+        doc = self.doc.model_copy(deep=True)  # 背景產出時使用當下的內容，不受之後的編輯影響
+        out_dir = Path(doc.folder) / "輸出"
+        pending = [name for name, on in (("會議紀錄（討論事項、結論、待辦事項表）", self.want_discussion.isChecked()
                                           or self.want_conclusion.isChecked() or self.want_action_table.isChecked()),
                                          ("心智圖", self.want_mindmap.isChecked())) if on]
-        note = f"<br>{'、'.join(pending)}：第 2、3 階段完成後產出。" if pending else ""
-        self.result_label.setText(f"<span style='color:{OK_COLOR}'><b>✔ 已產出逐字稿：</b></span>{path.name}{note}")
+        self.result_label.setText("")
+
+        def work(progress: Any, cancel: Any) -> Path:
+            progress(0, f"已儲存會議資訊與修改（{len(doc.segments)} 段、{len(doc.speakers())} 位講者）")
+            path = render_transcript(doc, out_dir, progress=progress)
+            for name in pending:
+                progress(100, f"{name}：需要 AI 整理，第 2、3 階段完成後產出（本次略過）")
+            return path
+
+        self.panel.start("產出文件", work, self._produced)
+
+    def _produced(self, path: Path) -> None:
+        self.last_output = path
+        self.open_file.setEnabled(True)
+        self.panel.append(f"輸出檔案：{path}")
+        self.result_label.setText(f"<span style='color:{OK_COLOR}'><b>✔ 已產出逐字稿：</b></span>{path.name}")
         self.host.statusBar().showMessage(f"已產出：{path}", 8000)
+
+    def _on_busy(self, busy: bool) -> None:
+        """產出期間鎖住編輯與按鈕，避免內容在產出途中被改動。"""
+        for w in (self.transcript_box, self.info_box, self.output_box, self.save_button, self.produce_button):
+            w.setEnabled(not busy and self.doc is not None)
 
     def _open_folder(self) -> None:
         if self.doc is None:

@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from datetime import date, datetime
 from pathlib import Path
 
@@ -110,9 +111,16 @@ def available_path(path: Path) -> Path:
     return candidate
 
 
-def render_transcript(doc: TranscriptDocument, out_dir: Path, now: datetime | None = None) -> Path:
-    """產出逐字稿 .docx，回傳檔案路徑。"""
+def render_transcript(doc: TranscriptDocument, out_dir: Path, now: datetime | None = None,
+                      progress: Callable[[float, str], None] | None = None) -> Path:
+    """產出逐字稿 .docx，回傳檔案路徑。progress（百分比, 狀態文字）用來在畫面上顯示進度。"""
+
+    def report(pct: float, msg: str) -> None:
+        if progress:
+            progress(pct, msg)
+
     info = doc.info
+    report(1, "建立逐字稿 .docx：設定版面（A4、標楷體、邊界）")
     meeting_date = date.fromisoformat(info.date)
     d = Document()
     section = d.sections[0]
@@ -132,6 +140,7 @@ def render_transcript(doc: TranscriptDocument, out_dir: Path, now: datetime | No
     _para(d, f"產製時間：{format_roc_datetime(now or datetime.now())}{engine}")
     _para(d)
 
+    report(5, f"寫入講者對照表（{len(doc.speakers())} 位講者）")
     _para(d, "講者對照表", bold=True)
     stats = speaker_stats(doc)
     table = d.add_table(rows=1, cols=5)
@@ -149,7 +158,12 @@ def render_transcript(doc: TranscriptDocument, out_dir: Path, now: datetime | No
     _para(d, "說明：「（疑似）」表示講者辨識不確定；〔台語，辨識可能不準〕、〔辨識信心低〕表示需要重聽確認。")
     _para(d, "─" * 20)
 
-    for start_sec, spk, uncertain, text in merged_blocks(doc):
+    blocks = merged_blocks(doc)
+    report(10, f"寫入逐字稿內容（{len(doc.segments)} 段，合併同一講者連續發言後為 {len(blocks)} 段）")
+    step = max(1, len(blocks) // 10)
+    for i, (start_sec, spk, uncertain, text) in enumerate(blocks, start=1):
+        if i % step == 0:
+            report(10 + 80 * i / len(blocks), f"寫入逐字稿內容（{i}/{len(blocks)} 段）")
         stamp = f"[{_hms(start_sec)}] " if doc.has_timecodes else ""
         head = f"{stamp}{doc.display_name(spk)}{'（疑似）' if uncertain else ''}："
         _para(d, head, bold=True)
@@ -158,5 +172,7 @@ def render_transcript(doc: TranscriptDocument, out_dir: Path, now: datetime | No
 
     out_dir.mkdir(parents=True, exist_ok=True)
     path = available_path(out_dir / output_filename("逐字稿", info.title, meeting_date, ".docx"))
+    report(95, f"儲存檔案：{path.name}")
     d.save(str(path))
+    report(100, "逐字稿 .docx 完成")
     return path

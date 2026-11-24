@@ -9,6 +9,8 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import QCoreApplication
+from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QApplication, QFileDialog, QInputDialog, QMessageBox
 
 from meeting_scribe import config as app_config
@@ -90,13 +92,25 @@ def test_edit_rename_merge_and_produce(win: Any, tmp_path: Path, monkeypatch: py
     page.agenda.setPlainText("一、科技執法\n\n二、容錯道路工程")
     page.want_mindmap.setChecked(True)
     page.produce()
+    assert not page.produce_button.isEnabled()  # 產出中鎖住
+    for _ in range(200):
+        QCoreApplication.processEvents()
+        if not page.panel.running:
+            break
+        QTest.qWait(10)
 
     assert page.last_output is not None and page.last_output.exists()
+    log = page.panel.log.toPlainText()
+    for expected in ("講者命名：講者3 → 公路局", "開始：產出文件", "寫入講者對照表", "寫入逐字稿內容",
+                     "儲存檔案：逐字稿_", "心智圖：需要 AI 整理", "輸出檔案："):
+        assert expected in log, expected
+    assert page.panel.status.text() == "完成" and page.panel.elapsed.text().startswith("已經過")
+    assert page.produce_button.isEnabled()
     assert page.last_output.parent == tmp_path / "job" / "輸出"
     texts = [p.text for p in docx.Document(str(page.last_output)).paragraphs]
     assert "請公路局說明本案進度。" in texts
     assert any(t.startswith("[00:00:00] 公路局：") for t in texts)
-    assert "心智圖" in page.result_label.text() and not page.dirty
+    assert "已產出逐字稿" in page.result_label.text() and not page.dirty
     saved = (tmp_path / "job" / "document.json").read_text(encoding="utf-8")
     assert "交通部第1會議室" in saved and '"meeting_type": "agenda"' in saved
     ui = app_config.load_config()["ui"]
