@@ -38,19 +38,20 @@ def _digest(text: str, n: int = 16) -> str:
     return hashlib.sha1(text.encode("utf-8")).hexdigest()[:n]
 
 
-def audio_dir(audio: Path) -> Path:
-    """依錄音檔的完整路徑、大小、修改時間決定暫存資料夾（檔案被修改就是新的暫存）。"""
+def audio_dir(audio: Path, clip: tuple[float, float] | None = None) -> Path:
+    """依錄音檔的完整路徑、大小、修改時間（以及選取的範圍）決定暫存資料夾。"""
     st = audio.stat()
-    return cache_root() / _digest(f"{audio.resolve()}|{st.st_size}|{st.st_mtime_ns}")
+    span = f"|{clip[0]:.2f}-{clip[1]:.2f}" if clip else ""
+    return cache_root() / _digest(f"{audio.resolve()}|{st.st_size}|{st.st_mtime_ns}{span}")
 
 
 def run_dir(audio: Path, engine: str, cfg: dict[str, Any], locales: list[str], phrases: list[str],
-            num_speakers: int | None) -> Path:
-    """同一個錄音檔＋同一組轉錄設定 → 同一個資料夾。"""
+            num_speakers: int | None, clip: tuple[float, float] | None = None) -> Path:
+    """同一個錄音檔（同一個範圍）＋同一組轉錄設定 → 同一個資料夾。"""
     engine_cfg = {k: v for k, v in cfg.get("stt", {}).get(engine, {}).items() if k not in _IGNORED_ENGINE_KEYS}
     key = json.dumps({"engine_cfg": engine_cfg, "locales": locales, "phrases": phrases,
                       "speakers": num_speakers}, sort_keys=True, ensure_ascii=False)
-    return audio_dir(audio) / f"{engine}_{_digest(key, 12)}"
+    return audio_dir(audio, clip) / f"{engine}_{_digest(key, 12)}"
 
 
 def read_json(path: Path) -> Any:

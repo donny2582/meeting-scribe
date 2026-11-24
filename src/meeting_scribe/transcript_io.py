@@ -120,8 +120,15 @@ def from_stt_result(result: SttResult, folder: Path, audio: Path | None = None) 
     info = MeetingInfo()
     if audio and audio.exists():
         info.date = datetime.fromtimestamp(audio.stat().st_mtime).date().isoformat()  # 錄音檔日期≈會議日期
+    source = "轉錄結果"
+    if result.clip_end is not None:
+        def hms(sec: float) -> str:
+            s = int(sec)
+            return f"{s // 3600:02d}:{s % 3600 // 60:02d}:{s % 60:02d}"
+
+        source += f"（範圍 {hms(result.clip_start)}–{hms(result.clip_end)}）"
     return TranscriptDocument(
-        source="轉錄結果", folder=str(folder), audio_name=audio.name if audio else None,
+        source=source, folder=str(folder), audio_name=audio.name if audio else None,
         audio_duration=result.audio_duration, engine=result.engine_version,
         segments=list(result.segments), info=info,
     )

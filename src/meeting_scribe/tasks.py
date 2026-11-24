@@ -74,8 +74,11 @@ def transcribe_audio(
     progress: ProgressCallback | None = None,
     cancel: CancelCheck | None = None,
     use_cache: bool = True,
+    clip: tuple[float, float] | None = None,
 ) -> SttResult:
     """前處理＋語音轉文字（＋需要時的 AI 臺灣在地化）。
+
+    clip＝（起點秒, 終點秒）：只轉錄這一段；逐字稿時間碼會加上起點，對應原始錄音的時間（不是從 0 開始）。
 
     中斷續跑（use_cache=True）：前處理音訊、轉錄結果、分段結果、在地化批次都存在
     ``checkpoint`` 暫存；同一個檔案、同一組設定再執行時，已完成（已付費）的部分直接沿用。
@@ -94,18 +97,19 @@ def transcribe_audio(
             from meeting_scribe.audio.preprocess import AudioError
 
             raise AudioError(f"找不到檔案：{audio}")
-        base = checkpoint.audio_dir(audio)
+        base = checkpoint.audio_dir(audio, clip)
         checkpoint.touch(base)
-        run = checkpoint.run_dir(audio, engine_name, cfg, locales, phrases, num_speakers)
+        run = checkpoint.run_dir(audio, engine_name, cfg, locales, phrases, num_speakers, clip)
     else:
         base = run = work_dir
     base.mkdir(parents=True, exist_ok=True)
     run.mkdir(parents=True, exist_ok=True)
     flac = base / "audio.flac"
     if not flac.exists():
-        report(0, f"音訊前處理中：{audio.name}")
+        span = f"（{format_hms(clip[0])}–{format_hms(clip[1])}）" if clip else ""
+        report(0, f"音訊前處理中：{audio.name}{span}")
         tmp = flac.with_suffix(".tmp.flac")
-        preprocess_audio(audio, tmp, ffmpeg)
+        preprocess_audio(audio, tmp, ffmpeg, clip=clip)
         tmp.replace(flac)
 
     stt_file = run / "stt_result.json"
@@ -117,12 +121,22 @@ def transcribe_audio(
         report(0, f"{engine.display_name}：語言 {'、'.join(registry.languages[c].name for c in langs)}，"
                   f"提示詞彙 {len(phrases)} 個")
         result = engine.transcribe(flac, locales, phrases, num_speakers, report, run)
+        if clip:
+            result = shift_to_clip(result, clip)
         stt_file.write_text(result.model_dump_json(indent=1), encoding="utf-8")  # 轉錄一完成就存檔
         usage.record_stt(usage.SERVICE_NAMES.get(engine_name, engine_name), result.engine_version,
                          result.audio_duration, engine.price_per_hour())
     if result.needs_zh_tw_localization:
         result = localize_if_possible(result, cfg, entries, report, run / "localize.json")
     return result
+
+
+def shift_to_clip(result: SttResult, clip: tuple[float, float]) -> SttResult:
+    """片段時間加上範圍起點，讓逐字稿時間碼對應原始錄音。"""
+    start, end = clip
+    segments = [s.model_copy(update={"start": round(s.start + start, 2), "end": round(s.end + start, 2)})
+                for s in result.segments]
+    return result.model_copy(update={"segments": segments, "clip_start": start, "clip_end": end})
 
 
 def localize_if_possible(result: SttResult, cfg: dict[str, Any], entries: list[Any],
@@ -178,6 +192,8 @@ def format_hms(sec: float) -> str:
 def write_transcript_txt(result: SttResult, path: Path) -> Path:
     """把辨識結果寫成易讀的逐字稿草稿（未經後處理）。"""
     lines = [f"辨識引擎：{result.engine_version}", f"錄音長度：{format_hms(result.audio_duration)}"]
+    if result.clip_end is not None:
+        lines.append(f"轉錄範圍：{format_hms(result.clip_start)}–{format_hms(result.clip_end)}（時間碼對應原始錄音）")
     if result.localized_by and not result.needs_zh_tw_localization:
         lines.append(f"中文字形：已轉為臺灣繁體，並由 AI 完成臺灣在地化校潤（{result.localized_by}）")
     elif result.script_conversion:
@@ -204,6 +220,7 @@ def run_transcribe_job(
     engine_name: str, audio: Path, langs: list[str], glossaries: list[Path], cfg: dict[str, Any],
     registry: LanguageRegistry, out_root: Path, num_speakers: int | None = None,
     progress: ProgressCallback | None = None, cancel: CancelCheck | None = None,
+    clip: tuple[float, float] | None = None,
 ) -> TranscribeOutput:
     """轉錄並輸出到「輸出資料夾\\{日期時間}_{檔名}_{引擎}」。"""
     from meeting_scribe import checkpoint
@@ -211,7 +228,8 @@ def run_transcribe_job(
     checkpoint.purge_old()
     folder = out_root / f"{datetime.now():%Y%m%d_%H%M}_{audio.stem}_{engine_name}"
     result = transcribe_audio(engine_name, audio, langs, glossaries, cfg, registry, folder / "_work",
-                              num_speakers, progress, cancel)
+                              num_speakers, progress, cancel, clip=clip)
+    folder.mkdir(parents=True, exist_ok=True)
     json_path = folder / "stt_raw.json"
     json_path.write_text(result.model_dump_json(indent=2), encoding="utf-8")
     txt_path = write_transcript_txt(result, folder / "逐字稿草稿.txt")

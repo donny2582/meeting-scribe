@@ -38,6 +38,10 @@
   已提前實作逐字稿 .docx（render/docx_transcript.py、render/roc_date.py）；會議紀錄與心智圖仍待第 2、3 階段，
   完成後接到本分頁的「產出文件」按鈕。
 - 測試一律透過 tests/conftest.py 隔離 APPDATA 與金鑰，不得讀寫使用者真正的設定檔。
+- **與使用者一律用繁體中文溝通。**
+- **語音範圍**（「轉錄」分頁，gui/audio_range.py，QtMultimedia 試聽）：只轉錄 clip＝（起點, 終點）；
+  前處理用 ffmpeg -ss/-t 擷取，轉錄後所有片段時間加上起點（tasks.shift_to_clip），SttResult 記錄 clip_start／clip_end。
+  暫存依範圍區分。之後任何顯示或輸出時間碼的功能都必須對應原始錄音時間，不可從 0 開始。
 - **費用上限與使用量**（API 金鑰分頁「3. 費用」）：每次雲端呼叫都要記到 `usage.py`（STT 用 record_stt、
   LLM 用 record_llm，指定 task）；開始新工作前檢查 `[budget] monthly_limit_usd`，達上限就停止。
   模型 token 單價在 `assets/model_catalog.toml`（price_in／price_out）。新增 LLM 呼叫時務必記錄用量。

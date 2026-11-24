@@ -66,13 +66,23 @@ def probe_duration(path: Path, ffmpeg: Path) -> float:
     return int(h) * 3600 + int(mi) * 60 + float(s)
 
 
-def preprocess_audio(src: Path, dst: Path, ffmpeg: Path, normalize: bool = True) -> AudioInfo:
-    """把錄音檔轉成 16kHz 單聲道 FLAC，並做音量正規化。"""
+def preprocess_audio(src: Path, dst: Path, ffmpeg: Path, normalize: bool = True,
+                     clip: tuple[float, float] | None = None) -> AudioInfo:
+    """把錄音檔轉成 16kHz 單聲道 FLAC，並做音量正規化。
+
+    clip＝（起點秒, 終點秒）時只擷取這一段（「轉錄」分頁的語音範圍）。
+    """
     if src.suffix.lower() not in SUPPORTED_EXTENSIONS:
         raise AudioError(f"不支援的檔案格式：{src.suffix}（支援 mp3、m4a、wav、mp4）")
     probe_duration(src, ffmpeg)  # 先檢查檔案可讀，損毀時不送雲端
     dst.parent.mkdir(parents=True, exist_ok=True)
-    cmd = [str(ffmpeg), "-hide_banner", "-nostdin", "-y", "-i", str(src), "-vn", "-ac", "1", "-ar", "16000"]
+    cmd = [str(ffmpeg), "-hide_banner", "-nostdin", "-y"]
+    if clip:
+        start, end = clip
+        if end - start < 1:
+            raise AudioError("選取的語音範圍太短（不到 1 秒）")
+        cmd += ["-ss", f"{start:.2f}", "-t", f"{end - start:.2f}"]
+    cmd += ["-i", str(src), "-vn", "-ac", "1", "-ar", "16000"]
     if normalize:
         cmd += ["-af", "loudnorm=I=-18:TP=-2:LRA=11"]
     cmd += ["-c:a", "flac", str(dst)]

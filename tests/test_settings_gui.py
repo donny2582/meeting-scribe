@@ -161,7 +161,8 @@ def test_transcribe_runs_in_background(app: QApplication, env: dict[str, Any],
     monkeypatch.setattr(win, "prepare_run", lambda engines: win.cfg)
     calls: list[tuple] = []
 
-    def fake_job(engine, audio_path, langs, glossaries, cfg, registry, out_root, speakers, progress, cancel):  # type: ignore[no-untyped-def]
+    def fake_job(engine, audio_path, langs, glossaries, cfg, registry, out_root, speakers, progress, cancel,
+                 clip=None):  # type: ignore[no-untyped-def]
         calls.append((engine, langs, speakers))
         progress(50, "語音轉文字中")
         folder = out_root / "job"

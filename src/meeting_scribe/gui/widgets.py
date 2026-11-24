@@ -144,7 +144,7 @@ class LanguagePicker(QWidget):
             cb = QCheckBox(rule.name + ("（固定）" if rule.base else ""))
             cb.setChecked(rule.base or rule.code in selected)
             cb.setEnabled(not rule.base)
-            cb.toggled.connect(self.changed.emit)
+            cb.toggled.connect(lambda _on: self.changed.emit())
             self.boxes[rule.code] = cb
             lay.addWidget(cb)
         lay.addStretch(1)

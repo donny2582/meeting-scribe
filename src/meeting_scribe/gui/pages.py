@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
 
 from meeting_scribe import tasks
 from meeting_scribe.config import default_glossary_names, user_glossary_dir
+from meeting_scribe.gui.audio_range import AudioRangePicker, hms
 from meeting_scribe.gui.settings import ENGINES
 from meeting_scribe.gui.widgets import (
     AUDIO_FILTER,
@@ -131,7 +132,15 @@ class TranscribePage(QWidget):
         v.addWidget(self.audio_info)
         lay.addWidget(box)
 
-        box = QGroupBox("2. 辨識設定")
+        box = QGroupBox("2. 語音範圍（可以只轉錄其中一段）")
+        v = QVBoxLayout(box)
+        self.range_picker = AudioRangePicker()
+        v.addWidget(self.range_picker)
+        v.addWidget(hint("例如只轉錄正式開會的部分、略過會前閒聊。逐字稿的時間碼會對應原始錄音的時間（不是從 0 開始）。"))
+        self.range_box = box
+        lay.addWidget(box)
+
+        box = QGroupBox("3. 辨識設定")
         form = QFormLayout(box)
         self.engine = _engine_combo(cfg.get("stt", {}).get("default_engine", "azure"))
         self.engine.currentIndexChanged.connect(lambda _i: self.host.engines_changed())
@@ -154,7 +163,7 @@ class TranscribePage(QWidget):
         form.addRow("套用詞庫：", g_row)
         lay.addWidget(box)
 
-        box = QGroupBox("3. 輸出")
+        box = QGroupBox("4. 輸出")
         v = QVBoxLayout(box)
         form = QFormLayout()
         self.output = FilePicker("dir", title="選擇輸出資料夾")
@@ -190,8 +199,11 @@ class TranscribePage(QWidget):
         path = self.audio.path()
         if path and path.is_file():
             self.audio_info.setText(f"{path.name}（{path.stat().st_size / 1024 / 1024:.1f} MB）")
+            if path != self.range_picker.path:
+                self.range_picker.load(path)
         else:
             self.audio_info.setText("支援 mp3、m4a、wav、mp4（只取音軌）。")
+            self.range_picker.load(None)
 
     def selected_engines(self) -> list[str]:
         return [str(self.engine.currentData())]
@@ -214,13 +226,16 @@ class TranscribePage(QWidget):
         glossaries = self.glossaries.paths()
         speakers = self.speakers.value() or None
         registry = self.host.registry
+        clip = self.range_picker.clip()
+        self.range_picker.stop()
 
         def work(progress: Any, cancel: Any) -> tasks.TranscribeOutput:
             return tasks.run_transcribe_job(engine, audio, langs, glossaries, cfg, registry, out_root,
-                                            speakers, progress, cancel)
+                                            speakers, progress, cancel, clip=clip)
 
         self._current_audio = audio
-        self.panel.start(f"轉錄 {audio.name}", work, self._done)
+        span = f"（範圍 {hms(clip[0])}–{hms(clip[1])}）" if clip else ""
+        self.panel.start(f"轉錄 {audio.name}{span}", work, self._done)
 
     def _done(self, out: tasks.TranscribeOutput) -> None:
         self.last_output = out

@@ -83,7 +83,7 @@ def test_stt_result_cached_and_reused(tmp_path: Path, monkeypatch: pytest.Monkey
             return 0.1
 
     monkeypatch.setattr(tasks, "find_ffmpeg", lambda cfg: Path("ffmpeg"))
-    monkeypatch.setattr(tasks, "preprocess_audio", lambda src, dst, ff: dst.write_bytes(b"flac"))
+    monkeypatch.setattr(tasks, "preprocess_audio", lambda src, dst, ff, **k: dst.write_bytes(b"flac"))
     monkeypatch.setattr(tasks, "create_engine", lambda name, cfg, ff: FakeEngine())
     args = ("soniox", audio, ["zh"], [], load_config(), LanguageRegistry.load(), tmp_path / "work")
     messages: list[str] = []

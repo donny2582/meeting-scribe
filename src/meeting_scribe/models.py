@@ -32,6 +32,8 @@ class SttResult(BaseModel):
         default=False, description="尚待 LLM 做臺灣繁體在地化（見 postprocess/localize.py）"
     )
     localized_by: str | None = Field(default=None, description="已完成臺灣在地化的 LLM，例：anthropic claude-opus-5-5")
+    clip_start: float = Field(default=0.0, description="只轉錄部分範圍時的起點（秒）；片段時間已加上此值，對應原始錄音")
+    clip_end: float | None = Field(default=None, description="只轉錄部分範圍時的終點（秒）")
 
 
 class Segment(BaseModel):
