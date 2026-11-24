@@ -153,13 +153,22 @@ def test_summarize_meeting_end_to_end(tmp_path: Path, monkeypatch: pytest.Monkey
     pairs = [(0, segs[0]), (1, segs[1]), (2, segs[2])]  # 第 4 段被當成贅字移除，編號仍對應原始位置
     out = tasks.summarize_meeting(doc, pairs, load_config(), tmp_path / "輸出")
     assert "S0002 [00:10:10] 公路局：內容1" in llm.calls[0]["user"]
-    text = out.preview_path.read_text(encoding="utf-8-sig")
-    assert out.preview_path.name == "會議紀錄草稿_道安研商會議_1151109.txt"
-    for expected in ("壹、會議時間：115年11月9日(星期一)下午2時00分", "伍、討論事項：", "陸、結論：",
-                     "    一、永續提升人行安全計畫", "(一) 公路局：配合修正績效指標。　〔依據：00:10:10 公路局〕",
-                     "主席裁示：（未明確裁示）（待查證）", "待辦事項追蹤表", "提送修正版計畫｜公路局｜115年11月11日｜00:10:20 講者3",
-                     "散會(下午4時30分)", "講者2 的身分不確定"):
-        assert expected in text, expected
+    import docx
+
+    assert out.minutes_path.name == "會議紀錄_道安研商會議_1151109.docx"
+    d = docx.Document(str(out.minutes_path))
+    texts = [p.text for p in d.paragraphs]
+    for expected in ("道安研商會議", "壹、會議時間：115年11月9日(星期一)下午2時00分", "伍、討論事項：",
+                     "一、永續提升人行安全計畫", "陸、結論：", "(一)公路局：配合修正績效指標。",
+                     "(一)主席裁示：（未明確裁示）（待查證）", "待辦事項追蹤表", "散會(下午4時30分)"):
+        assert expected in texts, expected
+    comments = [c.text for c in d.comments]
+    assert any(c == "依據：00:10:10–00:10:15 公路局" for c in comments)
+    assert any("待查證：主席未明確裁示" in c for c in comments)
+    assert any(c.startswith("AI 提醒的不確定之處") and "講者2 的身分不確定" in c for c in comments)
+    row = [c.text for c in d.tables[0].rows[1].cells]
+    assert row == ["1", "提送修正版計畫", "公路局", "115年11月11日", "00:10:20"]
+    assert out.png_path is None  # 沒勾心智圖
     assert json.loads(out.json_path.read_text(encoding="utf-8"))["meeting_type"] == "agenda"
     assert out.validation.pending == 2
 

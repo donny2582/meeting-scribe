@@ -217,7 +217,7 @@ class DocumentPage(QWidget):
         self.none_warning.hide()
         v.addWidget(self.none_warning)
         v.addWidget(hint("勾選討論事項、結論、待辦事項表或心智圖時，會由 AI 依會議類型整理（「整理討論事項、結論、待辦」模型），"
-                         "每條附依據時間碼，找不到依據的標「（待查證）」；目前先輸出文字草稿，Word 排版與心智圖圖檔於第 3 階段完成。"))
+                         "每條結論以 Word 註解標明依據時間碼，找不到依據的以黃色標「（待查證）」；心智圖輸出 PNG 與 XMind。"))
         lay.addWidget(self.output_box)
 
         # ---- 4. 產出前的文字處理（與產出項目分開：這是處理方式，不是產出的檔案） ----
@@ -260,14 +260,19 @@ class DocumentPage(QWidget):
         self.open_file = QPushButton("開啟逐字稿")
         self.open_file.clicked.connect(lambda: self.last_output and open_path(self.last_output))
         self.last_minutes: Path | None = None
-        self.open_minutes = QPushButton("開啟會議紀錄草稿")
-        self.open_minutes.setToolTip("AI 整理的討論事項、結論、待辦（文字預覽，含依據時間碼與待查證標記）")
+        self.last_mindmap: Path | None = None
+        self.open_minutes = QPushButton("開啟會議紀錄")
+        self.open_minutes.setToolTip("每條結論都有 Word 註解標明依據時間碼；黃色為待查證")
         self.open_minutes.setEnabled(False)
         self.open_minutes.clicked.connect(lambda: self.last_minutes and open_path(self.last_minutes))
+        self.open_mindmap = QPushButton("開啟心智圖")
+        self.open_mindmap.setEnabled(False)
+        self.open_mindmap.clicked.connect(lambda: self.last_mindmap and open_path(self.last_mindmap))
         self.produce_button = primary_button("產出文件")
         self.produce_button.clicked.connect(self.produce)
         run.addStretch(1)
-        for b in (self.save_button, self.open_folder, self.open_file, self.open_minutes, self.produce_button):
+        for b in (self.save_button, self.open_folder, self.open_file, self.open_minutes, self.open_mindmap,
+                  self.produce_button):
             run.addWidget(b)
         self.folder_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         lay.addWidget(self.folder_label)
@@ -626,7 +631,6 @@ class DocumentPage(QWidget):
             if want_ai:
                 try:
                     result["minutes"] = tasks.summarize_meeting(doc, pairs, cfg, out_dir, progress, cancel)
-                    progress(100, f"會議紀錄草稿（文字預覽）：{result['minutes'].preview_path.name}")
                 except (SummaryError, LLMError) as exc:
                     result["minutes_error"] = str(exc)
                     setup_issue = any(k in str(exc) for k in ("需要 AI", "已達上限"))
@@ -637,8 +641,6 @@ class DocumentPage(QWidget):
             if want_transcript:
                 clean_doc = doc.model_copy(update={"segments": [s for _, s in pairs]})
                 result["transcript"] = render_transcript(clean_doc, out_dir, progress=progress)
-            if want_ai:
-                progress(100, "會議紀錄 Word 檔與心智圖圖檔：第 3 階段（排版）完成後產出；目前先提供文字草稿核對內容")
             return result
 
         self.panel.start("產出文件", work, self._produced)
@@ -653,17 +655,24 @@ class DocumentPage(QWidget):
             lines.append(f"<span style='color:{OK_COLOR}'><b>✔ 已產出逐字稿：</b></span>{path.name}")
         minutes = result.get("minutes")
         if minutes is not None:
-            self.last_minutes = minutes.preview_path
-            self.open_minutes.setEnabled(True)
             v = minutes.validation
-            lines.append(f"<span style='color:{OK_COLOR}'><b>✔ 已產出會議紀錄草稿：</b></span>"
-                         f"{minutes.preview_path.name}（{v.items} 條，{v.pending} 條待查證）")
-            self.panel.append(f"輸出檔案：{minutes.preview_path}")
+            if minutes.minutes_path:
+                self.last_minutes = minutes.minutes_path
+                self.open_minutes.setEnabled(True)
+                lines.append(f"<span style='color:{OK_COLOR}'><b>✔ 已產出會議紀錄：</b></span>"
+                             f"{minutes.minutes_path.name}（{v.items} 條，{v.pending} 條待查證）")
+            if minutes.png_path:
+                self.last_mindmap = minutes.png_path
+                self.open_mindmap.setEnabled(True)
+                lines.append(f"<span style='color:{OK_COLOR}'><b>✔ 已產出心智圖：</b></span>"
+                             f"{minutes.png_path.name}、{minutes.xmind_path.name if minutes.xmind_path else ''}")
+            for p in minutes.files():
+                self.panel.append(f"輸出檔案：{p}")
         elif result.get("minutes_error"):
             lines.append(f"<span style='color:{WARN_COLOR}'><b>會議紀錄未完成：</b></span>{result['minutes_error']}")
         self.result_label.setText("<br>".join(lines))
         self.host.statusBar().showMessage("產出完成：" + "、".join(
-            p.name for p in (path, minutes.preview_path if minutes else None) if p), 8000)
+            p.name for p in ([path] if path else []) + (minutes.files() if minutes else [])), 8000)
 
     def _check_outputs(self, *_: Any) -> bool:
         """至少要勾選一個產出項目；都沒勾時顯示提醒並停用「產出文件」。"""

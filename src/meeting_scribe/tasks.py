@@ -229,8 +229,13 @@ class MinutesOutput:
 
     summary: Any
     validation: Any
-    preview_path: Path
     json_path: Path
+    minutes_path: Path | None = None  # 會議紀錄 .docx
+    png_path: Path | None = None  # 心智圖 PNG
+    xmind_path: Path | None = None  # 心智圖 XMind
+
+    def files(self) -> list[Path]:
+        return [p for p in (self.minutes_path, self.png_path, self.xmind_path) if p]
 
 
 def summarize_meeting(
@@ -244,8 +249,6 @@ def summarize_meeting(
     from meeting_scribe import usage
     from meeting_scribe.llm import LLM_PROVIDERS, create_llm, provider_of
     from meeting_scribe.postprocess.localize import build_reference, load_term_map
-    from meeting_scribe.render.docx_transcript import output_filename
-    from meeting_scribe.render.minutes_text import render_minutes_text, write_minutes_text
     from meeting_scribe.summarize.summarizer import SummaryError, make_line, summarize
     from meeting_scribe.summarize.validator import validate_summary
 
@@ -274,15 +277,42 @@ def summarize_meeting(
                 + (f"（{detail}）" if detail else "") + (f"；移除 {validation.removed_ids} 個不存在的片段編號"
                                                        if validation.removed_ids else ""))
 
-    times = {segment_id(i): (s.start, doc.display_name(s.speaker)) for i, s in enumerate(doc.segments)}
-    want = {"discussion": doc.info.want_discussion, "conclusion": doc.info.want_conclusion,
-            "action_table": doc.info.want_action_table, "mindmap": doc.info.want_mindmap}
-    meeting_date = date.fromisoformat(doc.info.date)
-    name = output_filename("會議紀錄草稿", doc.info.title, meeting_date, ".txt")
-    preview = write_minutes_text(render_minutes_text(summary, info, times, want), out_dir / name)
     json_path = Path(doc.folder) / f"summary_{doc.info.meeting_type}.json"
     json_path.write_text(summary.model_dump_json(indent=1), encoding="utf-8")
-    return MinutesOutput(summary, validation, preview, json_path)
+    out = MinutesOutput(summary, validation, json_path)
+    out.minutes_path, out.png_path, out.xmind_path = render_outputs(doc, summary, cfg, out_dir, report)
+    return out
+
+
+def render_outputs(doc: Any, summary: Any, cfg: dict[str, Any], out_dir: Path,
+                   progress: ProgressCallback | None = None) -> tuple[Path | None, Path | None, Path | None]:
+    """依勾選項目產出會議紀錄 .docx、心智圖 PNG 與 XMind（第 3 階段）。不呼叫 AI。"""
+    from meeting_scribe.render.docx_minutes import render_minutes
+    from meeting_scribe.render.docx_transcript import available_path, output_filename
+    from meeting_scribe.render.mindmap_png import render_mindmap_png
+    from meeting_scribe.render.mindmap_xmind import render_mindmap_xmind
+
+    def report(pct: float, msg: str) -> None:
+        if progress:
+            progress(pct, msg)
+
+    info = doc.info
+    times = {segment_id(i): (s.start, s.end, doc.display_name(s.speaker)) for i, s in enumerate(doc.segments)}
+    minutes = png = xmind = None
+    if info.want_discussion or info.want_conclusion or info.want_action_table:
+        minutes = render_minutes(doc, summary, times, out_dir, cfg, report)
+        report(100, f"會議紀錄 .docx 完成：{minutes.name}")
+    if info.want_mindmap and summary.mindmap.text:
+        meeting_date = date.fromisoformat(info.date)
+        root = summary.mindmap.model_copy(update={"text": info.title.strip() or summary.mindmap.text})  # 保留兩行標題
+        report(0, "心智圖：繪製 PNG（由左往右展開）")
+        png = render_mindmap_png(root, available_path(out_dir / output_filename("心智圖", info.title, meeting_date,
+                                                                                 ".png")))
+        report(50, "心智圖：產生 XMind 檔")
+        xmind = render_mindmap_xmind(root, available_path(out_dir / output_filename("心智圖", info.title,
+                                                                                     meeting_date, ".xmind")))
+        report(100, f"心智圖完成：{png.name}、{xmind.name}")
+    return minutes, png, xmind
 
 
 def load_or_transcribe(cache: Path, reuse: bool, progress: ProgressCallback | None = None,
