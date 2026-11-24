@@ -27,6 +27,10 @@ class SttResult(BaseModel):
     locales: list[str]
     segments: list[RawSegment]
     raw_responses: list[dict] = Field(default_factory=list, description="引擎原始回應（完整保留）")
+    script_conversion: str | None = Field(default=None, description="已套用的中文字形轉換，例：s2twp")
+    needs_zh_tw_localization: bool = Field(
+        default=False, description="第 1 階段須先由 LLM 做臺灣繁體在地化（見 postprocess/localize.py）"
+    )
 
 
 class Segment(BaseModel):

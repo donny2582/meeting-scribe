@@ -35,11 +35,12 @@ from meeting_scribe.postprocess.lang_detect import LanguageRegistry
 
 AZURE_REGIONS = ["eastasia", "southeastasia", "japaneast", "japanwest", "koreacentral",
                  "eastus", "westus2", "westeurope"]
-ENGINES = (("azure", "Azure AI Speech"), ("openai", "OpenAI"))
+ENGINES = (("azure", "Azure AI Speech"), ("openai", "OpenAI"), ("soniox", "Soniox"))
 KEY_HELP = {
     "azure_speech_key": "Azure 入口網站 → 語音服務資源 →「金鑰與端點」",
     "openai_api_key": "platform.openai.com → API keys",
-    "anthropic_api_key": "console.anthropic.com → API Keys（第 2 階段摘要使用）",
+    "soniox_api_key": "console.soniox.com → 專案 → API Keys",
+    "anthropic_api_key": "console.anthropic.com → API Keys（第 1 階段臺灣在地化、第 2 階段摘要使用）",
 }
 
 
@@ -49,6 +50,9 @@ def check_key(name: str, key: str, cfg: dict[str, Any]) -> tuple[bool, str]:
     try:
         if name == "openai_api_key":
             base = stt.get("openai", {}).get("base_url", "https://api.openai.com/v1").rstrip("/")
+            resp = httpx.get(f"{base}/models", headers={"Authorization": f"Bearer {key}"}, timeout=20)
+        elif name == "soniox_api_key":
+            base = stt.get("soniox", {}).get("base_url", "https://api.soniox.com/v1").rstrip("/")
             resp = httpx.get(f"{base}/models", headers={"Authorization": f"Bearer {key}"}, timeout=20)
         elif name == "anthropic_api_key":
             resp = httpx.get(
@@ -246,7 +250,7 @@ class ServicesPage(QWidget):
         lay = QVBoxLayout(self)
 
         box = QGroupBox("語音轉文字引擎")
-        form = QFormLayout(box)
+        form = QFormLayout()
         self.default_engine = QComboBox()
         for code, label in ENGINES:
             self.default_engine.addItem(label, code)
@@ -260,19 +264,29 @@ class ServicesPage(QWidget):
         self.azure_endpoint = QLineEdit(stt.get("azure", {}).get("endpoint", ""))
         self.azure_endpoint.setPlaceholderText("選填，例：https://<資源名稱>.cognitiveservices.azure.com")
         self.openai_model = QLineEdit(stt.get("openai", {}).get("model", ""))
+        self.soniox_model = QLineEdit(stt.get("soniox", {}).get("model", ""))
+        self.soniox_model.setToolTip("Soniox 非同步模型名稱，例：stt-async-v6（官方改版時在此修改）")
         form.addRow("預設引擎：", self.default_engine)
         form.addRow("Azure 區域：", self.azure_region)
         form.addRow("Azure 自訂端點：", self.azure_endpoint)
         form.addRow("OpenAI 模型名稱：", self.openai_model)
+        form.addRow("Soniox 模型名稱：", self.soniox_model)
+        engine_box = QVBoxLayout(box)
+        engine_box.addLayout(form)
+        engine_box.addWidget(hint("Soniox 的中文輸出不保證是繁體：中文片段會先自動轉成臺灣繁體與臺灣用語，"
+                                  "之後產生會議紀錄前，再由 AI 做臺灣在地化校潤。"))
         lay.addWidget(box)
 
         box = QGroupBox("API 單價（請依官方價目表填寫）")
         form = QFormLayout(box)
         self.azure_price = self._price_box(stt.get("azure", {}).get("price_per_hour", 0.0))
         self.openai_price = self._price_box(stt.get("openai", {}).get("price_per_hour", 0.0))
+        self.soniox_price = self._price_box(stt.get("soniox", {}).get("price_per_hour", 0.0))
         self.cost = QLabel()
+        self.cost.setWordWrap(True)
         form.addRow("Azure：", self.azure_price)
         form.addRow("OpenAI：", self.openai_price)
+        form.addRow("Soniox：", self.soniox_price)
         form.addRow("2 小時會議約：", self.cost)
         lay.addWidget(box)
 
@@ -294,7 +308,7 @@ class ServicesPage(QWidget):
         lay.addWidget(box)
         lay.addStretch(1)
 
-        for w in (self.azure_price, self.openai_price):
+        for w in (self.azure_price, self.openai_price, self.soniox_price):
             w.valueChanged.connect(self._refresh_cost)
         self.default_engine.currentIndexChanged.connect(self.changed.emit)
         self._refresh_cost()
@@ -312,7 +326,8 @@ class ServicesPage(QWidget):
 
     def _refresh_cost(self) -> None:
         parts = []
-        for label, spin in (("Azure", self.azure_price), ("OpenAI", self.openai_price)):
+        for label, spin in (("Azure", self.azure_price), ("OpenAI", self.openai_price),
+                            ("Soniox", self.soniox_price)):
             parts.append(f"{label} US$ {spin.value() * 2:.2f}" if spin.value() else f"{label} 未設定單價")
         self.cost.setText("；".join(parts))
 
@@ -341,6 +356,10 @@ class ServicesPage(QWidget):
                 "openai": {
                     "model": self.openai_model.text().strip(),
                     "price_per_hour": round(self.openai_price.value(), 3),
+                },
+                "soniox": {
+                    "model": self.soniox_model.text().strip(),
+                    "price_per_hour": round(self.soniox_price.value(), 3),
                 },
             },
         }

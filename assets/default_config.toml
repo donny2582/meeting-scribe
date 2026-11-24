@@ -41,6 +41,27 @@ overlap_sec = 30
 chunk_bitrate = "48k"
 price_per_hour = 0.0      # 美元／音訊小時；請依官方價目表填寫
 
+[stt.soniox]
+# Soniox 非同步（檔案）轉錄：https://docs.soniox.com/stt/async/async-transcription
+base_url = "https://api.soniox.com/v1"
+model = "stt-async-v6"     # 2026-11 官方建議的非同步模型；改版時在此修改
+language_hints_strict = false
+context_general = [
+    { key = "domain", value = "臺灣政府機關會議（交通、道路安全）" },
+    { key = "language", value = "臺灣華語，夾雜英文術語" },
+]
+context_max_chars = 8000   # context 上限約 10,000 字元
+segment_gap_sec = 1.0      # 停頓超過此秒數即分段
+poll_interval_sec = 3
+max_wait_sec = 7200
+max_duration_sec = 18000   # 單檔上限 300 分鐘
+chunk_sec = 14400
+overlap_sec = 30
+delete_after = true        # 取得結果後刪除 Soniox 上的檔案與轉錄
+convert_zh_tw = true       # 中文片段先以 OpenCC s2twp 轉成臺灣繁體
+llm_localize_zh_tw = true  # 第 1 階段：LLM 先做臺灣繁體在地化，再進行其他後處理
+price_per_hour = 0.10      # 美元／音訊小時（2026-11 官網：非同步約 US$0.10／小時），請自行確認
+
 [stt.local]
 whisper_model = "large-v3"
 diarization_model = "pyannote/speaker-diarization-3.1"

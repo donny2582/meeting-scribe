@@ -7,7 +7,7 @@ from typing import Any
 
 from meeting_scribe.stt.base import SttEngine, SttError
 
-ENGINE_NAMES = ("azure", "openai", "local")
+ENGINE_NAMES = ("azure", "openai", "soniox", "local")
 
 
 def create_engine(name: str, cfg: dict[str, Any], ffmpeg: Path) -> SttEngine:
@@ -20,6 +20,10 @@ def create_engine(name: str, cfg: dict[str, Any], ffmpeg: Path) -> SttEngine:
         from meeting_scribe.stt.openai_stt import OpenAISttEngine
 
         return OpenAISttEngine(cfg, ffmpeg)
+    if name == "soniox":
+        from meeting_scribe.stt.soniox_stt import SonioxSttEngine
+
+        return SonioxSttEngine(cfg, ffmpeg)
     if name == "local":
         from meeting_scribe.stt.local_whisper import LocalWhisperEngine
 

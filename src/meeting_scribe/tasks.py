@@ -112,7 +112,10 @@ def format_hms(sec: float) -> str:
 
 def write_transcript_txt(result: SttResult, path: Path) -> Path:
     """把辨識結果寫成易讀的逐字稿草稿（未經後處理）。"""
-    lines = [f"辨識引擎：{result.engine_version}", f"錄音長度：{format_hms(result.audio_duration)}", ""]
+    lines = [f"辨識引擎：{result.engine_version}", f"錄音長度：{format_hms(result.audio_duration)}"]
+    if result.script_conversion:
+        lines.append("中文字形：已自動轉為臺灣繁體（產生會議紀錄前會再由 AI 做臺灣在地化校潤）")
+    lines.append("")
     for s in result.segments:
         mark = "（疑似）" if s.speaker_uncertain else ""
         lines.append(f"[{format_hms(s.start)}] {s.speaker}{mark}：{s.text}")

@@ -22,6 +22,7 @@ KEYRING_SERVICE = "MeetingScribe"
 SECRET_NAMES: dict[str, str] = {
     "azure_speech_key": "Azure AI Speech 金鑰",
     "openai_api_key": "OpenAI API 金鑰",
+    "soniox_api_key": "Soniox API 金鑰",
     "anthropic_api_key": "Anthropic API 金鑰",
 }
 
@@ -56,7 +57,11 @@ def user_config_path() -> Path:
 
 
 #: 每個 STT 引擎需要的金鑰
-ENGINE_KEYS: dict[str, str] = {"azure": "azure_speech_key", "openai": "openai_api_key"}
+ENGINE_KEYS: dict[str, str] = {
+    "azure": "azure_speech_key",
+    "openai": "openai_api_key",
+    "soniox": "soniox_api_key",
+}
 
 
 def documents_dir() -> Path:

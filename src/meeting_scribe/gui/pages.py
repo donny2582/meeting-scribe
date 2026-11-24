@@ -276,9 +276,10 @@ class BenchmarkPage(QWidget):
         form = QFormLayout(box)
         eng_row = QHBoxLayout()
         self.engine_boxes: dict[str, QCheckBox] = {}
+        with_keys = [c for c, _ in ENGINES if not tasks.missing_keys([c])]
         for code, label in ENGINES:
             cb = QCheckBox(label)
-            cb.setChecked(True)
+            cb.setChecked(code in with_keys if with_keys else True)  # 預設勾選已設定金鑰的引擎
             cb.toggled.connect(lambda _on: self.host.engines_changed())
             self.engine_boxes[code] = cb
             eng_row.addWidget(cb)
