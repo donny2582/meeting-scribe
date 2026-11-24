@@ -82,6 +82,8 @@ class MainWindow(QMainWindow):
         }
         for page, label in self._pages.values():
             self.tabs.addTab(page, label)
+        self.tabs.currentChanged.connect(
+            lambda _i: self.tabs.currentWidget() is self.keys and self.keys.refresh_usage())
         self.tabs.setTabToolTip(0, "把錄音檔轉成逐字稿")
         self.tabs.setTabToolTip(1, "修正逐字稿、填寫會議資訊、產出文件（也可以匯入已經有的逐字稿）")
         self.tabs.setTabToolTip(2, "第 0 階段：比較語音轉文字引擎，決定預設引擎")
@@ -182,6 +184,20 @@ class MainWindow(QMainWindow):
             return None
         if not self.save_settings(quiet=True):
             return None
+        from meeting_scribe import usage
+
+        budget = usage.budget_status(self.cfg)
+        if engines and budget.exceeded:
+            self.go_to("keys")
+            self.keys.refresh_usage()
+            self.keys.budget_limit.setFocus()
+            QMessageBox.warning(self, "已達費用上限",
+                                f"本月估計費用 US$ {budget.used:.2f} 已達上限 US$ {budget.limit:.2f}，"
+                                "已停止新的工作。\n\n如需繼續，請在「API 金鑰」分頁的「3. 費用」提高上限後按「儲存設定」。")
+            return None
+        if engines and budget.warning:
+            self.statusBar().showMessage(
+                f"提醒：本月估計費用 US$ {budget.used:.2f}，已用掉上限的 {budget.ratio:.0%}。", 15000)
         missing = tasks.missing_keys(engines)
         if missing:
             self.go_to("keys")
@@ -270,6 +286,8 @@ class MainWindow(QMainWindow):
 
     def _set_busy(self, _busy: bool) -> None:
         busy = self.busy()
+        if not busy:
+            self.keys.refresh_usage()  # 工作結束後更新已使用費用
         for b in (self.transcribe.run_button, self.benchmark.run_button, self.benchmark.draft_button):
             b.setEnabled(not busy)
 

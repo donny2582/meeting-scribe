@@ -43,6 +43,15 @@ def _catalog() -> dict[str, Any]:
         return tomllib.load(f)
 
 
+def token_price(model_id: str) -> tuple[float, float] | None:
+    """模型的 token 單價（美元／百萬 tokens：輸入, 輸出）；清單裡沒有的模型回傳 None（費用未知）。"""
+    for kind in ("anthropic", "openai"):
+        for m in _catalog().get(kind, []):
+            if m.get("id") == model_id and "price_in" in m and "price_out" in m:
+                return float(m["price_in"]), float(m["price_out"])
+    return None
+
+
 def builtin_options(kind: str) -> list[ModelOption]:
     """內建選項（kind：anthropic、openai、openai_stt、soniox）。"""
     return [ModelOption(m["id"], m.get("label", m["id"]), m.get("note", "")) for m in _catalog().get(kind, [])]

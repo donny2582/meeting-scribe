@@ -30,6 +30,7 @@ from meeting_scribe.config import (
 from meeting_scribe.postprocess.lang_detect import LanguageRegistry
 from meeting_scribe.stt import ENGINE_NAMES
 from meeting_scribe.stt.base import SttError
+from meeting_scribe.usage import BudgetExceeded
 
 log = logging.getLogger("meeting_scribe")
 
@@ -185,6 +186,6 @@ def main(argv: list[str] | None = None) -> int:
     setup_logging(args.verbose)
     try:
         return int(args.func(args))
-    except (SttError, AudioError, tasks.Cancelled) as exc:
+    except (SttError, AudioError, tasks.Cancelled, BudgetExceeded) as exc:
         print(f"錯誤：{exc}", file=sys.stderr)
         return 1

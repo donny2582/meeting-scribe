@@ -88,7 +88,17 @@ class AnthropicLLM(LLMClient):
             data = json.loads(text)
         except json.JSONDecodeError as exc:
             raise LLMError("模型回傳的內容不是有效的 JSON") from exc
-        usage = response.usage
-        log.info("Anthropic %s：輸入 %s、輸出 %s tokens", response.model,
-                 getattr(usage, "input_tokens", "?"), getattr(usage, "output_tokens", "?"))
+        self._record(response, task)
         return data
+
+    @staticmethod
+    def _record(response: Any, task: str) -> None:
+        """記錄用量（快取讀寫的 token 也算入輸入，費用估算偏保守）。"""
+        from meeting_scribe import usage as usage_log
+
+        u = response.usage
+        tokens_in = sum(int(getattr(u, k, 0) or 0) for k in
+                        ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"))
+        tokens_out = int(getattr(u, "output_tokens", 0) or 0)
+        log.info("Anthropic %s：輸入 %s、輸出 %s tokens", response.model, tokens_in, tokens_out)
+        usage_log.record_llm("Anthropic", str(response.model), task, tokens_in, tokens_out)

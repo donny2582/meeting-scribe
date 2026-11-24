@@ -75,7 +75,10 @@ def transcribe_audio(
     cancel: CancelCheck | None = None,
 ) -> SttResult:
     """前處理＋語音轉文字。"""
+    from meeting_scribe import usage
+
     report = _guard(progress, cancel)
+    usage.check_budget(cfg)  # 本月費用已達上限時不開始
     ffmpeg = find_ffmpeg(cfg)
     work_dir.mkdir(parents=True, exist_ok=True)
     flac = work_dir / f"{audio.stem}.flac"
@@ -91,6 +94,8 @@ def transcribe_audio(
     report(0, f"{engine.display_name}：語言 {'、'.join(registry.languages[c].name for c in langs)}，"
               f"提示詞彙 {len(phrases)} 個")
     result = engine.transcribe(flac, registry.locales_for(langs), phrases, num_speakers, report, work_dir)
+    usage.record_stt(usage.SERVICE_NAMES.get(engine_name, engine_name), result.engine_version,
+                     result.audio_duration, engine.price_per_hour())
     if result.needs_zh_tw_localization:
         result = localize_if_possible(result, cfg, entries, report)
     return result
@@ -99,11 +104,15 @@ def transcribe_audio(
 def localize_if_possible(result: SttResult, cfg: dict[str, Any], entries: list[Any],
                          report: ProgressCallback) -> SttResult:
     """有文字整理服務的金鑰時，立即由 AI 做臺灣繁體在地化；沒有金鑰或失敗時保留自動繁體轉換的結果。"""
+    from meeting_scribe import usage
     from meeting_scribe.llm import LLM_PROVIDERS, LLMError, create_llm, provider_of
 
     label, key_name = LLM_PROVIDERS[provider_of(cfg)]
     if not get_secret(key_name):
         report(100, f"未設定 {label} 金鑰：中文只做自動繁體轉換，未做 AI 臺灣在地化")
+        return result
+    if usage.budget_status(cfg).exceeded:
+        report(100, "本月費用已達上限：中文只做自動繁體轉換，未做 AI 臺灣在地化")
         return result
     from meeting_scribe.postprocess.localize import localize_result
 

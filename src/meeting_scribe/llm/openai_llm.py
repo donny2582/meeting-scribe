@@ -88,7 +88,10 @@ class OpenAILLM(LLMClient):
             result = json.loads(message.get("content") or "")
         except json.JSONDecodeError as exc:
             raise LLMError("模型回傳的內容不是有效的 JSON") from exc
-        usage = data.get("usage") or {}
-        log.info("OpenAI %s：輸入 %s、輸出 %s tokens", data.get("model", model),
-                 usage.get("prompt_tokens", "?"), usage.get("completion_tokens", "?"))
+        from meeting_scribe import usage as usage_log
+
+        used = data.get("usage") or {}
+        tokens_in, tokens_out = int(used.get("prompt_tokens") or 0), int(used.get("completion_tokens") or 0)
+        log.info("OpenAI %s：輸入 %s、輸出 %s tokens", data.get("model", model), tokens_in, tokens_out)
+        usage_log.record_llm("OpenAI", model, task, tokens_in, tokens_out)
         return result

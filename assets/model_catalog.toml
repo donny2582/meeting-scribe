@@ -1,39 +1,53 @@
 # 模型清單：下拉選單的選項與各工作的建議模型（2026-11）。
-# 模型改版時只要改這個檔案；使用者在介面按「＋」新增的模型存在使用者設定檔 [models.custom]。
+# 模型改版或調價時只要改這個檔案（price_in／price_out＝美元／百萬 tokens，用來估算費用）；使用者在介面按「＋」新增的模型存在使用者設定檔 [models.custom]。
 
 # ---- 文字整理處理（LLM） ----
 [[anthropic]]
 id = "claude-haiku-5-5"
+price_in = 0.10      # 美元／百萬 tokens（輸入）
+price_out = 0.50     # 美元／百萬 tokens（輸出）
 label = "Claude Haiku 5.5"
 note = "最便宜、最快"
 
 [[anthropic]]
 id = "claude-sonnet-5-5"
+price_in = 2.00
+price_out = 10.00
 label = "Claude Sonnet 5.5"
 note = "均衡"
 
 [[anthropic]]
 id = "claude-opus-5-5"
+price_in = 4.00
+price_out = 20.00
 label = "Claude Opus 5.5"
 note = "品質最好，費用約 Sonnet 的 2 倍"
 
 [[openai]]
 id = "gpt-6-luna"
+price_in = 0.10
+price_out = 0.50
 label = "GPT-6 Luna"
 note = "最便宜、最快"
 
 [[openai]]
 id = "gpt-6.1-terra"
+price_in = 1.00
+price_out = 5.00
 label = "GPT-6.1 Terra"
 note = "較便宜"
 
 [[openai]]
 id = "gpt-6.2-sol"
+price_in = 2.00
+price_out = 10.00
 label = "GPT-6.2 Sol"
 note = "均衡"
 
 [[openai]]
 id = "gpt-6.2-astra"
+price_in = 8.00
+price_out = 40.00
 label = "GPT-6.2 Astra"
 note = "品質最好，費用較高"
 

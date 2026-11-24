@@ -20,6 +20,7 @@ from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QFormLayout,
     QGridLayout,
     QGroupBox,
@@ -27,6 +28,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -229,6 +231,9 @@ class KeysPage(QWidget):
             self.llm_stack.addWidget(page)
         v.addWidget(self.llm_stack)
         lay.addWidget(box)
+
+        # ---- 區塊 3：費用 ----
+        lay.addWidget(self._budget_box(cfg))
         lay.addStretch(1)
 
         area = QScrollArea()
@@ -263,6 +268,95 @@ class KeysPage(QWidget):
             lst.append(model_id)
         for picker in self._pickers.get(kind, []):
             picker.add_option(model_id)
+
+    def _budget_box(self, cfg: dict[str, Any]) -> QGroupBox:
+        """「3. 費用」：每月上限、本月已使用、各服務明細、累計。"""
+        box = QGroupBox("3. 費用")
+        v = QVBoxLayout(box)
+        v.addWidget(hint("費用由本程式依用量估算（語音轉錄＝錄音時數 × 每小時單價；文字整理＝tokens × 模型單價），"
+                         "實際金額以各服務的帳單為準。達到上限後會停止新的轉錄與 AI 處理。"))
+        form = QFormLayout()
+        self.budget_limit = QDoubleSpinBox()
+        self.budget_limit.setRange(0.0, 100000.0)
+        self.budget_limit.setDecimals(2)
+        self.budget_limit.setSingleStep(5.0)
+        self.budget_limit.setPrefix("US$ ")
+        self.budget_limit.setSpecialValueText("不限制")
+        self.budget_limit.setValue(float(cfg.get("budget", {}).get("monthly_limit_usd", 0) or 0))
+        self.budget_limit.setToolTip("每月最多花多少錢（美元）；0＝不限制。用到 80% 時會提醒。")
+        self.budget_warn = float(cfg.get("budget", {}).get("warn_ratio", 0.8))
+        form.addRow("每月費用上限：", self.budget_limit)
+        v.addLayout(form)
+
+        self.usage_label = QLabel()
+        self.usage_label.setStyleSheet("font-weight: bold;")
+        self.usage_bar = QProgressBar()
+        self.usage_bar.setRange(0, 100)
+        self.usage_bar.setTextVisible(False)
+        self.usage_bar.setMaximumHeight(10)
+        self.usage_detail = QLabel()
+        self.usage_detail.setWordWrap(True)
+        self.usage_total = hint("")
+        v.addWidget(self.usage_label)
+        v.addWidget(self.usage_bar)
+        v.addWidget(self.usage_detail)
+        v.addWidget(self.usage_total)
+        row = QHBoxLayout()
+        refresh = QPushButton("↻ 重新整理")
+        refresh.clicked.connect(self.refresh_usage)
+        ledger = QPushButton("開啟使用紀錄（Excel）")
+        ledger.setToolTip("每一次呼叫的時間、服務、模型、用量與估計費用（不含逐字稿內容）")
+        ledger.clicked.connect(self._open_ledger)
+        row.addWidget(refresh)
+        row.addWidget(ledger)
+        row.addStretch(1)
+        v.addLayout(row)
+        self.budget_limit.valueChanged.connect(lambda _v: self.refresh_usage())
+        self.refresh_usage()
+        return box
+
+    def refresh_usage(self) -> None:
+        """重新讀取使用紀錄，更新本月已使用、明細與進度條。"""
+        from meeting_scribe import usage
+
+        summary = usage.summarize(usage.load_records())
+        status = usage.BudgetStatus(self.budget_limit.value(), summary.month_cost, self.budget_warn)
+        month = summary.month.replace("-", " 年 ") + " 月"
+        if status.enabled:
+            text = f"本月（{month}）已使用 US$ {status.used:.2f}／上限 US$ {status.limit:.2f}（{status.ratio:.0%}）"
+            color = ERROR_COLOR if status.exceeded else (WARN_COLOR if status.warning else OK_COLOR)
+            if status.exceeded:
+                text += "　已達上限，新的工作會停止"
+            elif status.warning:
+                text += "　快到上限了"
+        else:
+            text, color = f"本月（{month}）已使用 US$ {status.used:.2f}（未設定上限）", OK_COLOR
+        self.usage_label.setText(text)
+        self.usage_label.setStyleSheet(f"font-weight: bold; color: {color};")
+        self.usage_bar.setVisible(status.enabled)
+        self.usage_bar.setValue(min(100, int(status.ratio * 100)))
+        self.usage_bar.setStyleSheet(f"QProgressBar::chunk {{ background: {color}; }}")
+
+        lines = []
+        for g in summary.by_service:
+            amount = f"{g.calls} 次" + (f"、{g.audio_sec / 3600:.1f} 小時" if g.kind == usage.KIND_STT
+                                       else f"、{g.tokens:,} tokens")
+            unpriced = "，未設定單價不計費" if g.unpriced == g.calls else ("，部分未設定單價" if g.unpriced else "")
+            lines.append(f"・{g.kind}｜{g.service}：US$ {g.cost:.2f}（{amount}{unpriced}）")
+        self.usage_detail.setText("\n".join(lines) if lines else "本月還沒有使用紀錄。")
+        note = (f"本月有 {summary.unpriced_month} 筆用量沒有單價、未計入費用（例如 Azure、OpenAI 語音轉錄尚未設定每小時單價，"
+                "可按「開啟設定檔（進階）」填寫 price_per_hour）。") if summary.unpriced_month else ""
+        self.usage_total.setText(f"累計（全部紀錄）US$ {summary.total_cost:.2f}。{note}")
+
+    def _open_ledger(self) -> None:
+        from meeting_scribe import usage
+        from meeting_scribe.gui.widgets import open_path
+
+        path = usage.ledger_path()
+        if not path.exists():
+            QMessageBox.information(self, "使用紀錄", "還沒有使用紀錄，轉錄或 AI 處理後就會產生。")
+            return
+        open_path(path)
 
     def _refresh_button(self, kind: str) -> QPushButton:
         """「↻ 更新模型清單」：用已儲存（或剛貼上）的金鑰向服務查詢目前可用的模型。"""
@@ -508,6 +602,7 @@ class KeysPage(QWidget):
                 **{p: {"models": {t: pk.value() for (pp, t), pk in self.task_models.items() if pp == p}}
                    for p, _l, _k in LLM_SERVICES},
             },
+            "budget": {"monthly_limit_usd": round(self.budget_limit.value(), 2)},
             "models": {"custom": {k: list(v) for k, v in self.custom.items()},
                        "fetched": {k: list(v) for k, v in self.fetched.items()}},
         }
