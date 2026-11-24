@@ -54,6 +54,7 @@ class MeetingInfo(BaseModel):
     want_action_table: bool = False
     want_mindmap: bool = False
     clean_fillers: bool = True  # 產出的逐字稿刪除贅字（只刪不改；畫面上的原文不變）
+    want_transcript: bool = True  # 產出逐字稿 .docx（選用；產出項目至少要選一項）
 
 
 class TranscriptDocument(BaseModel):

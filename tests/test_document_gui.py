@@ -118,6 +118,39 @@ def test_edit_rename_merge_and_produce(win: Any, tmp_path: Path, monkeypatch: py
     assert ui["recent_locations"][0] == "交通部第1會議室" and ui["last_recorder"] == "王小明"
 
 
+def test_outputs_at_least_one(win: Any, tmp_path: Path) -> None:
+    win.open_transcription(_out(tmp_path), None)
+    page = win.document
+    assert page.want_transcript.isEnabled() and page.produce_button.isEnabled()
+    for cb in page.output_checks:
+        cb.setChecked(False)
+    assert not page.none_warning.isHidden() and not page.produce_button.isEnabled()
+    page.title.setPlainText("會議")
+    page.produce()
+    assert not page.panel.running and any("至少勾選一個" in a for a in win.asked)
+    page.want_mindmap.setChecked(True)
+    assert page.none_warning.isHidden() and page.produce_button.isEnabled()
+
+
+def test_transcript_optional(win: Any, tmp_path: Path) -> None:
+    win.open_transcription(_out(tmp_path), None)
+    page = win.document
+    page.title.setPlainText("會議")
+    for cb in page.output_checks:
+        cb.setChecked(cb is page.want_conclusion)  # 只要結論，不要逐字稿
+    page.produce()
+    for _ in range(1500):
+        QCoreApplication.processEvents()
+        if not page.panel.running:
+            break
+        QTest.qWait(10)
+    assert page.last_output is None  # 沒有產出逐字稿
+    assert not list((tmp_path / "job" / "輸出").glob("逐字稿_*.docx")) if (tmp_path / "job" / "輸出").exists() else True
+    assert "會議紀錄未完成" in page.result_label.text()  # 測試環境沒有金鑰
+    saved = (tmp_path / "job" / "document.json").read_text(encoding="utf-8")
+    assert '"want_transcript": false' in saved
+
+
 def test_produce_requires_title(win: Any, tmp_path: Path) -> None:
     win.open_transcription(_out(tmp_path), None)
     win.document.produce()

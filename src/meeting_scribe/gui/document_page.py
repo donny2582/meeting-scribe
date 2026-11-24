@@ -195,34 +195,59 @@ class DocumentPage(QWidget):
             v.addLayout(row)
         self.type_hint = hint("")
         self.type_hint.hide()
-        v.addWidget(QLabel("要產出的項目："))
+        self.items_label = QLabel("要產出的項目（至少選一項）：")
+        v.addWidget(self.items_label)
         items = QHBoxLayout()
         items.addSpacing(12)
-        self.want_transcript = QCheckBox("逐字稿 .docx（一律產出）")
+        self.want_transcript = QCheckBox("逐字稿 .docx")
         self.want_transcript.setChecked(True)
-        self.want_transcript.setEnabled(False)
         self.want_discussion = QCheckBox("討論事項")
         self.want_conclusion = QCheckBox("結論")
         self.want_action_table = QCheckBox("待辦事項表")
         self.want_mindmap = QCheckBox("心智圖（PNG、XMind）")
-        for cb in (self.want_transcript, self.want_discussion, self.want_conclusion,
-                   self.want_action_table, self.want_mindmap):
+        self.output_checks = (self.want_transcript, self.want_discussion, self.want_conclusion,
+                              self.want_action_table, self.want_mindmap)
+        for cb in self.output_checks:
             items.addWidget(cb)
+            cb.toggled.connect(self._check_outputs)
         items.addStretch(1)
         v.addLayout(items)
-        clean_row = QHBoxLayout()
-        clean_row.addSpacing(12)
-        self.want_clean = QCheckBox("刪除贅字（呃、嗯、那個、對對對、重複的字…；只刪不改）")
-        self.want_clean.setChecked(True)
-        self.want_clean.setToolTip("先用規則刪除，再由 AI（「API 金鑰」分頁的「刪除贅字」模型，預設 Haiku 5.5，每場約 US$0.03）"
-                                   "處理；AI 的結果必須只刪字、不能加字或換順序，否則改用規則結果。\n"
-                                   "只影響產出的 Word 檔，畫面上的原文不變。")
-        clean_row.addWidget(self.want_clean)
-        clean_row.addStretch(1)
-        v.addLayout(clean_row)
+        self.none_warning = QLabel("請至少勾選一個要產出的項目。")
+        self.none_warning.setStyleSheet(f"color: {WARN_COLOR}; font-weight: bold; padding-left: 12px;")
+        self.none_warning.hide()
+        v.addWidget(self.none_warning)
         v.addWidget(hint("勾選討論事項、結論、待辦事項表或心智圖時，會由 AI 依會議類型整理（「整理討論事項、結論、待辦」模型），"
                          "每條附依據時間碼，找不到依據的標「（待查證）」；目前先輸出文字草稿，Word 排版與心智圖圖檔於第 3 階段完成。"))
         lay.addWidget(self.output_box)
+
+        # ---- 4. 產出前的文字處理（與產出項目分開：這是處理方式，不是產出的檔案） ----
+        self.process_box = QGroupBox("4. 產出前的文字處理")
+        pv = QVBoxLayout(self.process_box)
+        card = QWidget()
+        card.setObjectName("cleanCard")
+        card.setStyleSheet(
+            "#cleanCard { background: rgba(31, 111, 235, 0.07); border-left: 4px solid #1f6feb;"
+            " border-radius: 6px; }"
+        )
+        cv = QVBoxLayout(card)
+        cv.setContentsMargins(14, 10, 12, 10)
+        self.want_clean = QCheckBox("刪除贅字")
+        self.want_clean.setChecked(True)
+        self.want_clean.setStyleSheet("QCheckBox { font-weight: bold; font-size: 11pt; }")
+        self.want_clean.setToolTip("只影響產出的檔案，上方表格裡的原文不會被改。")
+        cv.addWidget(self.want_clean)
+        for line in (
+            "會刪除：呃、嗯、欸、那個（停頓時）、對對對 → 對、重複的字（我我我們 → 我們）",
+            "只刪不改：AI 的結果必須只少字、不能加字或換順序，沒通過的段落改用規則刪除的結果",
+            "只影響產出的檔案（逐字稿與 AI 整理用的文字），上方表格裡的原文不會被改",
+            "使用「刪除贅字」模型（預設 Haiku 5.5，每場約 US$0.03，可在「API 金鑰」分頁更改）",
+        ):
+            row = QHBoxLayout()
+            row.setContentsMargins(24, 0, 0, 0)
+            row.addWidget(hint("・" + line), 1)
+            cv.addLayout(row)
+        pv.addWidget(card)
+        lay.addWidget(self.process_box)
 
         # ---- 產出 ----
         run = QHBoxLayout()
@@ -279,8 +304,7 @@ class DocumentPage(QWidget):
         self.date.dateChanged.connect(self._mark_dirty)
         self.start.timeChanged.connect(self._mark_dirty)
         self.end.timeChanged.connect(self._mark_dirty)
-        for cb in (self.want_discussion, self.want_conclusion, self.want_action_table, self.want_mindmap,
-                   self.want_clean):
+        for cb in (*self.output_checks, self.want_clean):
             cb.toggled.connect(self._mark_dirty)
         self.type_group.buttonToggled.connect(lambda *_: self._mark_dirty())
         self._set_enabled(False)
@@ -296,9 +320,12 @@ class DocumentPage(QWidget):
         return box
 
     def _set_enabled(self, on: bool) -> None:
-        for w in (self.transcript_box, self.info_box, self.output_box, self.save_button, self.produce_button):
+        for w in (self.transcript_box, self.info_box, self.output_box, self.process_box, self.save_button,
+                  self.produce_button):
             w.setEnabled(on)
         self.open_folder.setEnabled(on)
+        if on:
+            self._check_outputs()
         self.open_file.setEnabled(self.last_output is not None)
         self.empty_hint.setVisible(not on)
         if not on:
@@ -364,6 +391,7 @@ class DocumentPage(QWidget):
         self.want_action_table.setChecked(info.want_action_table)
         self.want_mindmap.setChecked(info.want_mindmap)
         self.want_clean.setChecked(info.clean_fillers)
+        self.want_transcript.setChecked(info.want_transcript)
         self._fill_table()
         self._update_labels()
         extra = f"｜錄音 {_hms(doc.audio_duration)}" if doc.audio_duration and doc.has_timecodes else ""
@@ -526,6 +554,7 @@ class DocumentPage(QWidget):
             want_action_table=self.want_action_table.isChecked(),
             want_mindmap=self.want_mindmap.isChecked(),
             clean_fillers=self.want_clean.isChecked(),
+            want_transcript=self.want_transcript.isChecked(),
         )
 
     def save(self, quiet: bool = True) -> bool:
@@ -553,6 +582,9 @@ class DocumentPage(QWidget):
 
         if self.doc is None or self.panel.running:
             return
+        if not self._check_outputs():
+            QMessageBox.information(self, "產出文件", "請至少勾選一個要產出的項目。")
+            return
         if not self.title.toPlainText().strip():
             self.title.setFocus()
             QMessageBox.information(self, "產出文件", "請先填寫會議名稱。")
@@ -561,6 +593,7 @@ class DocumentPage(QWidget):
             return
         doc = self.doc.model_copy(deep=True)  # 背景產出時使用當下的內容，不受之後的編輯影響
         out_dir = Path(doc.folder) / "輸出"
+        want_transcript = self.want_transcript.isChecked()
         want_ai = any(cb.isChecked() for cb in (self.want_discussion, self.want_conclusion,
                                                 self.want_action_table, self.want_mindmap))
         self.result_label.setText("")
@@ -600,8 +633,10 @@ class DocumentPage(QWidget):
                     tail = ("逐字稿照常產出" if setup_issue else
                             "逐字稿照常產出；已完成的部分有存檔，再按「產出文件」會從中斷處繼續，不重複計費")
                     progress(100, f"AI 整理會議紀錄未完成：{exc}（{tail}）")
-            clean_doc = doc.model_copy(update={"segments": [s for _, s in pairs]})
-            result["transcript"] = render_transcript(clean_doc, out_dir, progress=progress)
+            result["transcript"] = None
+            if want_transcript:
+                clean_doc = doc.model_copy(update={"segments": [s for _, s in pairs]})
+                result["transcript"] = render_transcript(clean_doc, out_dir, progress=progress)
             if want_ai:
                 progress(100, "會議紀錄 Word 檔與心智圖圖檔：第 3 階段（排版）完成後產出；目前先提供文字草稿核對內容")
             return result
@@ -610,10 +645,12 @@ class DocumentPage(QWidget):
 
     def _produced(self, result: dict[str, Any]) -> None:
         path = result["transcript"]
-        self.last_output = path
-        self.open_file.setEnabled(True)
-        self.panel.append(f"輸出檔案：{path}")
-        lines = [f"<span style='color:{OK_COLOR}'><b>✔ 已產出逐字稿：</b></span>{path.name}"]
+        lines: list[str] = []
+        if path is not None:
+            self.last_output = path
+            self.open_file.setEnabled(True)
+            self.panel.append(f"輸出檔案：{path}")
+            lines.append(f"<span style='color:{OK_COLOR}'><b>✔ 已產出逐字稿：</b></span>{path.name}")
         minutes = result.get("minutes")
         if minutes is not None:
             self.last_minutes = minutes.preview_path
@@ -625,12 +662,24 @@ class DocumentPage(QWidget):
         elif result.get("minutes_error"):
             lines.append(f"<span style='color:{WARN_COLOR}'><b>會議紀錄未完成：</b></span>{result['minutes_error']}")
         self.result_label.setText("<br>".join(lines))
-        self.host.statusBar().showMessage(f"已產出：{path}", 8000)
+        self.host.statusBar().showMessage("產出完成：" + "、".join(
+            p.name for p in (path, minutes.preview_path if minutes else None) if p), 8000)
+
+    def _check_outputs(self, *_: Any) -> bool:
+        """至少要勾選一個產出項目；都沒勾時顯示提醒並停用「產出文件」。"""
+        any_checked = any(cb.isChecked() for cb in self.output_checks)
+        self.none_warning.setVisible(not any_checked)
+        self.produce_button.setEnabled(any_checked and self.doc is not None and not self.panel.running)
+        self.produce_button.setToolTip("" if any_checked else "請至少勾選一個要產出的項目")
+        return any_checked
 
     def _on_busy(self, busy: bool) -> None:
         """產出期間鎖住編輯與按鈕，避免內容在產出途中被改動。"""
-        for w in (self.transcript_box, self.info_box, self.output_box, self.save_button, self.produce_button):
+        for w in (self.transcript_box, self.info_box, self.output_box, self.process_box, self.save_button,
+                  self.produce_button):
             w.setEnabled(not busy and self.doc is not None)
+        if not busy:
+            self._check_outputs()
 
     def _open_folder(self) -> None:
         if self.doc is None:
