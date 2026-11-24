@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QInputDialog,
+    QLabel,
     QListWidget,
     QListWidgetItem,
     QMessageBox,
@@ -44,6 +45,8 @@ from meeting_scribe.gui.settings import ENGINES
 from meeting_scribe.gui.widgets import (
     AUDIO_FILTER,
     CSV_FILTER,
+    OK_COLOR,
+    WARN_COLOR,
     FilePicker,
     LanguagePicker,
     RunPanel,
@@ -248,7 +251,7 @@ class TranscribePage(QWidget):
 
 
 class BenchmarkPage(QWidget):
-    """「引擎評估」分頁（第 0 階段）：準備標準答案 → 選擇標準答案 → 執行評估。"""
+    """「引擎評估」分頁（第 0 階段）：準備測試錄音與標準答案（產生草稿、校正後存檔）→ 執行評估。"""
 
     def __init__(self, host: Host, cfg: dict[str, Any], output_dir: Path) -> None:
         super().__init__()
@@ -260,16 +263,17 @@ class BenchmarkPage(QWidget):
         lay.addWidget(hint("用同一段真實會議錄音比較各引擎的辨識品質、講者辨識、詞庫命中率、語言判定、"
                            "處理時間與費用，依結果決定預設引擎（SPEC 5.3）。"))
 
-        box = QGroupBox("步驟 1：準備測試錄音與標準答案草稿")
+        box = QGroupBox("步驟 1：準備測試錄音與標準答案")
         step1 = QVBoxLayout(box)
         form = QFormLayout()
         step1.addLayout(form)
         self.audio = FilePicker("open", AUDIO_FILTER, "約 10 分鐘的真實會議錄音", "選擇測試錄音")
         self.lang_audio = FilePicker("open", AUDIO_FILTER, "選填：約 3 分鐘、含日文或韓文發言", "選擇語言測試錄音")
+        self.out_dir = FilePicker("dir", title="選擇評估資料夾")
+        self.out_dir.set_path(output_dir / "引擎評估")
         self.draft_engine = _engine_combo(cfg.get("stt", {}).get("default_engine", "azure"))
         self.draft_button = QPushButton("產生標準答案草稿")
-        self.open_drafts = QPushButton("用 Excel 開啟草稿")
-        self.open_drafts.setEnabled(False)
+        self.open_drafts = QPushButton("用 Excel 開啟並校正")
         self.open_drafts.clicked.connect(self._open_drafts)
         self.draft_button.clicked.connect(self.make_drafts)
         row = QHBoxLayout()
@@ -277,22 +281,20 @@ class BenchmarkPage(QWidget):
         row.addWidget(self.draft_button)
         row.addWidget(self.open_drafts)
         row.addStretch(1)
+        self.ref_status = QLabel()
+        self.ref_status.setWordWrap(True)
         form.addRow("測試錄音：", self.audio)
         form.addRow("日韓測試錄音：", self.lang_audio)
+        form.addRow("評估資料夾：", self.out_dir)
         form.addRow("草稿使用：", row)
-        step1.addWidget(hint("草稿由引擎自動產生；請在 Excel 逐列校正 text（文字）、speaker（講者）、"
-                             "lang（zh／en／ja／ko）後另存為 CSV UTF-8，作為步驟 2 的標準答案。"))
+        form.addRow("標準答案：", self.ref_status)
+        step1.addWidget(hint("草稿由引擎自動產生、存在評估資料夾。請用 Excel 逐列校正 text（文字）、speaker（講者）、"
+                             "lang（zh／en／ja／ko）後直接存檔（保留 CSV 格式），步驟 2 會自動使用校正後的檔案。"))
+        self.out_dir.changed.connect(lambda _t: self.refresh_status())
+        self.lang_audio.changed.connect(lambda _t: self.refresh_status())
         lay.addWidget(box)
 
-        box = QGroupBox("步驟 2：選擇校正後的標準答案")
-        form = QFormLayout(box)
-        self.reference = FilePicker("open", CSV_FILTER, "校正後的標準答案 CSV", "選擇標準答案")
-        self.lang_reference = FilePicker("open", CSV_FILTER, "選填：日韓測試錄音的標準答案", "選擇標準答案")
-        form.addRow("標準答案：", self.reference)
-        form.addRow("日韓標準答案：", self.lang_reference)
-        lay.addWidget(box)
-
-        box = QGroupBox("步驟 3：執行評估")
+        box = QGroupBox("步驟 2：執行評估")
         form = QFormLayout(box)
         eng_row = QHBoxLayout()
         self.engine_boxes: dict[str, QCheckBox] = {}
@@ -306,12 +308,9 @@ class BenchmarkPage(QWidget):
         eng_row.addStretch(1)
         self.languages = LanguagePicker(host.registry, cfg.get("languages", {}).get("default", ["zh", "en"]))
         self.reuse = QCheckBox("沿用先前的轉錄結果（只重新計算指標，不再呼叫 API）")
-        self.out_dir = FilePicker("dir", title="選擇評估輸出資料夾")
-        self.out_dir.set_path(output_dir / "引擎評估")
         form.addRow("比較引擎：", eng_row)
         form.addRow("會議語言：", self.languages)
         form.addRow("", self.reuse)
-        form.addRow("輸出資料夾：", self.out_dir)
         lay.addWidget(box)
 
         run_row = QHBoxLayout()
@@ -337,12 +336,40 @@ class BenchmarkPage(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(_scroll(body))
+        self.refresh_status()
 
     def selected_engines(self) -> list[str]:
         return [c for c, cb in self.engine_boxes.items() if cb.isChecked()]
 
     def _out(self) -> Path | None:
         return self.out_dir.path()
+
+    def reference_paths(self) -> list[Path]:
+        """評估要用的標準答案檔（有日韓測試錄音時多一個）。"""
+        out = self._out()
+        if not out:
+            return []
+        paths = [out / tasks.REFERENCE_FILE]
+        if self.lang_audio.path():
+            paths.append(out / tasks.LANG_REFERENCE_FILE)
+        return paths
+
+    def refresh_status(self) -> None:
+        """顯示標準答案是否已產生、是否已校正。"""
+        texts = {"missing": ("尚未產生（請按「產生標準答案草稿」）", "gray"),
+                 "uncorrected": ("草稿尚未校正", WARN_COLOR),
+                 "corrected": ("✔ 已校正", OK_COLOR)}
+        lines = []
+        for p in self.reference_paths():
+            text, color = texts[tasks.reference_status(p)]
+            lines.append(f"{p.name}：<span style='color:{color}'><b>{text}</b></span>")
+        self.ref_status.setText("<br>".join(lines) or "請選擇評估資料夾")
+        self.open_drafts.setEnabled(any(p.exists() for p in self.reference_paths()))
+
+    def showEvent(self, event: Any) -> None:
+        """切到本分頁時重新檢查（使用者可能剛在 Excel 存檔）。"""
+        self.refresh_status()
+        super().showEvent(event)
 
     def make_drafts(self) -> None:
         """由引擎結果產生標準答案草稿。"""
@@ -353,6 +380,13 @@ class BenchmarkPage(QWidget):
         if not out:
             QMessageBox.information(self, "產生草稿", "請選擇輸出資料夾。")
             return
+        corrected = [p.name for p in self.reference_paths() if tasks.reference_status(p) == "corrected"]
+        if corrected:
+            answer = QMessageBox.question(
+                self, "產生草稿", f"{'、'.join(corrected)} 已經校正過。\n\n會先把它備份成「…_備份_日期時間.csv」，"
+                "再產生新的草稿。要繼續嗎？")
+            if answer != QMessageBox.StandardButton.Yes:
+                return
         engine = str(self.draft_engine.currentData())
         cfg = self.host.prepare_run([engine])
         if cfg is None:
@@ -363,45 +397,54 @@ class BenchmarkPage(QWidget):
 
         def work(progress: Any, cancel: Any) -> list[Path]:
             paths = [tasks.make_reference(audio, engine, langs, glossaries, cfg, registry,
-                                          out / "reference_draft.csv", progress, cancel)]
+                                          out / tasks.REFERENCE_FILE, progress, cancel)]
             if lang_audio and lang_audio.is_file():
                 paths.append(tasks.make_reference(lang_audio, engine, ["zh", "en", "ja", "ko"], glossaries, cfg,
-                                                  registry, out / "reference_lang_draft.csv", progress, cancel))
+                                                  registry, out / tasks.LANG_REFERENCE_FILE, progress, cancel))
             return paths
 
         self.panel.start("產生標準答案草稿", work, self._drafts_done)
 
     def _drafts_done(self, paths: list[Path]) -> None:
         self.drafts = paths
-        self.open_drafts.setEnabled(True)
+        self.refresh_status()
         for p in paths:
             self.panel.append(f"草稿：{p}")
-        self.panel.append("請用 Excel 校正後另存，再到步驟 2 選擇。")
+        self.panel.append("請按「用 Excel 開啟並校正」，校正後直接存檔，再按「開始評估」。")
 
     def _open_drafts(self) -> None:
-        for p in self.drafts:
+        for p in self.reference_paths():
             if p.exists():
                 open_path(p)
 
     def start(self) -> None:
-        """執行評估。"""
-        audio, ref, out = self.audio.path(), self.reference.path(), self._out()
-        lang_audio, lang_ref = self.lang_audio.path(), self.lang_reference.path()
+        """執行評估：自動使用評估資料夾裡的標準答案。"""
+        audio, out = self.audio.path(), self._out()
+        lang_audio = self.lang_audio.path()
         engines = self.selected_engines()
+        refs = self.reference_paths()
         problems = []
         if not audio or not audio.is_file():
             problems.append("步驟 1 的測試錄音")
-        if not ref or not ref.is_file():
-            problems.append("步驟 2 的標準答案")
-        if lang_audio and not (lang_ref and lang_ref.is_file()):
-            problems.append("日韓測試錄音的標準答案（或清除日韓測試錄音）")
+        if not out:
+            problems.append("評估資料夾")
+        elif any(tasks.reference_status(p) == "missing" for p in refs):
+            problems.append("標準答案：請先按「產生標準答案草稿」並校正")
         if not engines:
             problems.append("至少一個比較引擎")
-        if not out:
-            problems.append("輸出資料夾")
         if problems:
-            QMessageBox.information(self, "開始評估", "請先提供：\n・" + "\n・".join(problems))
+            QMessageBox.information(self, "開始評估", "請先完成：\n・" + "\n・".join(problems))
             return
+        unchecked = [p.name for p in refs if tasks.reference_status(p) == "uncorrected"]
+        if unchecked:
+            answer = QMessageBox.question(
+                self, "標準答案尚未校正",
+                f"{'、'.join(unchecked)} 還是引擎自動產生的草稿，沒有校正過。\n\n"
+                "用沒校正的草稿評估，產生草稿的引擎會顯得特別準，結果只能參考。仍要繼續嗎？")
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        ref = refs[0]
+        lang_ref = refs[1] if len(refs) > 1 else None
         reuse = self.reuse.isChecked()
         cfg = self.host.prepare_run([] if reuse else engines)
         if cfg is None:

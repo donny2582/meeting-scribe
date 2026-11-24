@@ -237,12 +237,40 @@ def run_transcribe_job(
     return TranscribeOutput(folder, json_path, txt_path, result)
 
 
+#: 引擎評估資料夾中的標準答案檔名（步驟 1 產生草稿，校正後直接存回原檔，評估時自動使用）
+REFERENCE_FILE = "reference_draft.csv"
+LANG_REFERENCE_FILE = "reference_lang_draft.csv"
+_REFERENCE_META = "reference_meta.json"
+
+
+def _sha1(path: Path) -> str:
+    import hashlib
+
+    return hashlib.sha1(path.read_bytes()).hexdigest()
+
+
+def reference_status(path: Path) -> str:
+    """標準答案狀態：missing（尚未產生）、uncorrected（還是引擎產生的草稿）、corrected（已校正過）。"""
+    from meeting_scribe import checkpoint
+
+    if not path.exists():
+        return "missing"
+    meta = checkpoint.read_json(path.parent / _REFERENCE_META) or {}
+    return "uncorrected" if meta.get(path.name) == _sha1(path) else "corrected"
+
+
 def make_reference(
     audio: Path, engine_name: str, langs: list[str], glossaries: list[Path], cfg: dict[str, Any],
     registry: LanguageRegistry, out_csv: Path, progress: ProgressCallback | None = None,
     cancel: CancelCheck | None = None,
 ) -> Path:
-    """由引擎結果產生標準答案草稿 CSV。"""
+    """由引擎結果產生標準答案草稿 CSV。
+
+    已經校正過的同名檔案不會被覆蓋：先備份成「…_備份_日期時間.csv」再產生新草稿。
+    """
+    import shutil
+
+    from meeting_scribe import checkpoint
     from meeting_scribe.benchmark import write_reference_draft
 
     work = out_csv.parent / "_work"
@@ -252,7 +280,16 @@ def make_reference(
         engine_name=engine_name, audio=audio, langs=langs, glossaries=glossaries,
         cfg=cfg, registry=registry, work_dir=work, cancel=cancel,
     )
+    if reference_status(out_csv) == "corrected":
+        backup = out_csv.with_name(f"{out_csv.stem}_備份_{datetime.now():%Y%m%d_%H%M%S}.csv")
+        shutil.copyfile(out_csv, backup)
+        if progress:
+            progress(100, f"已校正的標準答案已備份為 {backup.name}")
     write_reference_draft(result.segments, out_csv, registry)
+    meta_path = out_csv.parent / _REFERENCE_META
+    meta = checkpoint.read_json(meta_path) or {}
+    meta[out_csv.name] = _sha1(out_csv)  # 記下草稿指紋，用來判斷之後有沒有校正
+    checkpoint.write_json(meta_path, meta)
     return out_csv
 
 
@@ -309,6 +346,10 @@ def run_benchmark(
     if not reports:
         return BenchmarkOutput(None, "", errors)
     md = render_report(reports, cfg["benchmark"], audio.name, lang_audio.name if lang_audio else None)
+    unchecked = [p.name for p in (reference, lang_reference) if p and reference_status(p) == "uncorrected"]
+    if unchecked:
+        md = (f"> ⚠ 標準答案（{'、'.join(unchecked)}）尚未校正，仍是引擎自動產生的草稿；"
+              "產生草稿的引擎會顯得特別準，結果僅供參考。\n\n") + md
     report_path = out_dir / "benchmark_report.md"
     report_path.write_text(md, encoding="utf-8")
     if progress:

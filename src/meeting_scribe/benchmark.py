@@ -60,9 +60,16 @@ def format_time(sec: float) -> str:
 
 
 def load_reference(path: Path) -> list[RefSegment]:
-    """讀取標準答案 CSV。"""
+    """讀取標準答案 CSV（UTF-8；Excel 存成「CSV（逗號分隔）」時為 Big5，也可以讀）。"""
+    import io
+
+    data = path.read_bytes()
+    try:
+        text = data.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = data.decode("cp950", errors="replace")
     out: list[RefSegment] = []
-    with open(path, encoding="utf-8-sig", newline="") as f:
+    with io.StringIO(text, newline="") as f:
         for row in csv.DictReader(f):
             if not (row.get("text") or "").strip():
                 continue
