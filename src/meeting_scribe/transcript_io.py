@@ -2,7 +2,11 @@
 
 可匯入的格式：
 - 本程式的 ``stt_raw.json``（轉錄結果）或 ``document.json``（已存的文件）
-- ``.txt``：每行「[時:分:秒] 講者：內容」（本程式的逐字稿草稿也是這個格式），或沒有時間碼的「講者：內容」、純文字
+- ``.txt``：有容錯，常見寫法都可以：
+  「[00:04:07] 講者1：內容」（本程式的逐字稿草稿）、
+  「00:04:07 演講者 1」換行再寫內容（會議軟體匯出的逐字稿）、
+  「演講者 1  00:04:07」換行再寫內容、「4:07 主席：內容」；
+  也可以沒有時間碼（「講者：內容」或純文字）。
 - ``.srt``：字幕檔
 - ``.docx``：Word 逐字稿（逐段落以 .txt 規則解析）
 """
@@ -23,7 +27,6 @@ IMPORT_EXTENSIONS = (".txt", ".srt", ".docx", ".json")
 MEETING_TYPES = {"topic": "工作進度會議（主題式）", "qa": "專家座談、問答型（問答式）", "agenda": "研商會、審查會（議程逐項式）"}
 
 _TS = r"(\d{1,2}):(\d{2}):(\d{2})(?:[.,](\d{1,3}))?"
-_LINE_RE = re.compile(rf"^\s*\[{_TS}\]\s*(.*)$")
 _SPEAKER_RE = re.compile(r"^\s*([^：:\[\]]{1,20}?)\s*[：:]\s*(.*)$")
 _SRT_TIME_RE = re.compile(rf"^\s*{_TS}\s*-->\s*{_TS}")
 _UNCERTAIN = "（疑似）"
@@ -134,8 +137,28 @@ def from_stt_result(result: SttResult, folder: Path, audio: Path | None = None) 
     )
 
 
-def _seconds(h: str, m: str, s: str, frac: str | None) -> float:
-    return int(h) * 3600 + int(m) * 60 + int(s) + (int(frac.ljust(3, "0")) / 1000 if frac else 0.0)
+def _seconds(h: str | None, m: str, s: str, frac: str | None) -> float:
+    return int(h or 0) * 3600 + int(m) * 60 + int(s) + (int(frac.ljust(3, "0")) / 1000 if frac else 0.0)
+
+
+# ---- 容錯解析 ----
+# 時間碼：時:分:秒 或 分:秒，可帶毫秒；可有 [ ]、( )、（ ）包住；冒號全形半形皆可
+_FLEX_TS = r"(?:(\d{1,2})[:：])?(\d{1,2})[:：](\d{2})(?:[.,](\d{1,3}))?"
+_OPEN, _CLOSE = r"[\[(（【]?", r"[\])）】]?"
+# 行首是時間碼：「00:04:07 演講者 1」「[00:04:07] 講者1：內容」「0:04 - 主席：內容」
+_HEAD_RE = re.compile(rf"^\s*{_OPEN}{_FLEX_TS}{_CLOSE}\s*(?:[-–—|｜]\s*)?(.*)$")
+# 行尾是時間碼（講者在前）：「演講者 1  00:04:07」「主席 (4:07)」
+_TAIL_RE = re.compile(rf"^\s*([^\s：:，。！？,!?][^：:，。！？,!?]{{0,19}}?)\s*[-–—|｜]?\s*{_OPEN}{_FLEX_TS}{_CLOSE}\s*$")
+# 「演講者 1」「說話者2」「Speaker 3」「發言人 4」→ 講者N
+_GENERIC_SPEAKER_RE = re.compile(r"^(?:演講者|說話者|說話人|發言者|發言人|講者|speaker|spk)\s*(\d+)$", re.IGNORECASE)
+_SENTENCE_PUNCT = re.compile(r"[，。！？；,.!?;、]")
+
+
+def normalize_speaker(name: str) -> str:
+    """統一講者名稱：「演講者 1」「Speaker 1」→「講者1」；其他名稱（主席、公路局）保留。"""
+    name = name.strip().strip("：:").strip()
+    m = _GENERIC_SPEAKER_RE.match(name)
+    return f"講者{int(m.group(1))}" if m else name
 
 
 def _split_speaker(text: str) -> tuple[str, str, bool]:
@@ -145,28 +168,74 @@ def _split_speaker(text: str) -> tuple[str, str, bool]:
         return "", text.strip(), False
     speaker, body = m.group(1).strip(), m.group(2).strip()
     uncertain = speaker.endswith(_UNCERTAIN)
-    return speaker.removesuffix(_UNCERTAIN).strip(), body, uncertain
+    return normalize_speaker(speaker.removesuffix(_UNCERTAIN)), body, uncertain
+
+
+def _looks_like_speaker(text: str) -> bool:
+    """時間碼後面只有短短的名稱（沒有標點），視為講者，內容在下一行。"""
+    t = text.strip().removesuffix(_UNCERTAIN)
+    return 0 < len(t) <= 20 and not _SENTENCE_PUNCT.search(t)
+
+
+def _classify(line: str) -> tuple[str, float, str, bool]:
+    """判斷一行：("head", 秒, 其餘文字, 有無小時)、("tail", 秒, 講者, 有無小時) 或 ("text", 0, 原文, False)。"""
+    m = _HEAD_RE.match(line)
+    if m:
+        return "head", _seconds(*m.groups()[:4]), m.group(5).strip(), m.group(1) is not None
+    m = _TAIL_RE.match(line)
+    if m and _looks_like_speaker(m.group(1)):
+        return "tail", _seconds(*m.groups()[1:5]), m.group(1).strip(), m.group(2) is not None
+    return "text", 0.0, line, False
+
+
+def _sanity_check(kinds: list[tuple[str, float, str, bool]], lines: list[str]) -> list[tuple[str, float, str]]:
+    """避免把內容裡的時間（例如「1:20 的比例」）誤認成時間碼：
+
+    - 檔案裡多數時間碼有「時」時，沒有「時」的視為內容；
+    - 時間碼必須依序往後（倒退超過 1 秒的視為內容）。
+    """
+    stamps = [k for k in kinds if k[0] != "text"]
+    need_hours = bool(stamps) and sum(1 for k in stamps if k[3]) > len(stamps) / 2
+    out: list[tuple[str, float, str]] = []
+    last = -1.0
+    for (kind, sec, rest, hours), line in zip(kinds, lines, strict=True):
+        if kind != "text" and ((need_hours and not hours) or sec < last - 1):
+            out.append(("text", 0.0, line))
+            continue
+        if kind != "text":
+            last = sec
+        out.append((kind, sec, rest))
+    return out
 
 
 def parse_lines(lines: list[str]) -> tuple[list[RawSegment], bool]:
-    """解析逐行逐字稿，回傳（片段, 是否有時間碼）。"""
-    stamped = [ln for ln in lines if _LINE_RE.match(ln)]
+    """解析逐行逐字稿，回傳（片段, 是否有時間碼）。
+
+    容錯：時間碼可在行首或行尾、可有可無括號、可只有分:秒；講者可在同一行（「講者：內容」）
+    或時間碼後面單獨一行、內容在下一行；「演講者 1」等通用名稱統一成「講者1」；空行略過。
+    """
+    kinds = _sanity_check([_classify(ln) for ln in lines], lines)
+    timed = any(k != "text" for k, _, _ in kinds)
     segments: list[RawSegment] = []
-    if stamped:
-        for line in lines:
-            m = _LINE_RE.match(line)
-            if m:
-                start = _seconds(*m.groups()[:4])
-                speaker, body, uncertain = _split_speaker(m.group(5))
-                segments.append(RawSegment(start=start, end=start, speaker=speaker or "講者", text=body,
-                                           speaker_uncertain=uncertain))
-            elif segments and line.strip():  # 時間碼下一行的內容，或換行接續
-                prev = segments[-1]
-                joined = (prev.text + "\n" + line.strip()).strip()
-                segments[-1] = prev.model_copy(update={"text": joined})
+    if timed:
+        for kind, sec, rest in kinds:
+            if kind == "text":
+                if segments and rest.strip():  # 時間碼下一行的內容，或換行接續
+                    prev = segments[-1]
+                    joined = prev.text + ("\n" if prev.text else "") + rest.strip()
+                    segments[-1] = prev.model_copy(update={"text": joined})
+                continue
+            if kind == "tail" or (rest and ":" not in rest and "：" not in rest and _looks_like_speaker(rest)):
+                speaker, body = rest, ""  # 講者單獨一行，內容在下一行
+                uncertain = speaker.endswith(_UNCERTAIN)
+                speaker = normalize_speaker(speaker.removesuffix(_UNCERTAIN))
+            else:
+                speaker, body, uncertain = _split_speaker(rest)
+            segments.append(RawSegment(start=sec, end=sec, speaker=speaker or "講者", text=body,
+                                       speaker_uncertain=uncertain))
         for i in range(len(segments) - 1):  # 結束時間＝下一段開始時間
-            segments[i] = segments[i].model_copy(update={"end": segments[i + 1].start})
-        return [s for s in segments if s.text], True
+            segments[i] = segments[i].model_copy(update={"end": max(segments[i].start, segments[i + 1].start)})
+        return [s for s in segments if s.text.strip()], True
     for line in lines:
         if not line.strip():
             continue

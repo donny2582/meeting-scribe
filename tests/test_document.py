@@ -59,6 +59,50 @@ def test_parse_our_draft_format() -> None:
     assert segs[0].end == 45  # 結束時間＝下一段開始
 
 
+def test_parse_user_meeting_software_format() -> None:
+    """使用者提供的格式：時間碼（無括號）＋講者一行，內容在下一行。"""
+    lines = [
+        "00:04:07 演講者 1",
+        ("胎文的資訊照明的資訊，這個恐怕都是在目前的事故調查表裡面是反映不出來的。如果我的理解是正確的話，"
+         "那所以A one先處理那其他的我覺得可以再再大家再一起即時廣播。以上要圍我們。"),
+        "00:04:27 演講者 2",
+        "謝謝委員的提議啦，其實我對委員是有道法的，因為從我們在看警方的數據裡面，其實我們常常有一些疑惑喔，",
+        "那我也同意，就是委員剛才講，其實東西我覺得不是警員的錯，你沒有辦法再苛責他的啦，因為他在現場。",
+    ]
+    segs, timed = parse_lines(lines)
+    assert timed
+    assert [(s.start, s.end, s.speaker) for s in segs] == [(247, 267, "講者1"), (267, 267, "講者2")]
+    assert segs[0].text.startswith("胎文的資訊") and segs[0].text.endswith("以上要圍我們。")
+    assert segs[1].text.count("\n") == 1 and "因為他在現場。" in segs[1].text
+
+
+@pytest.mark.parametrize("lines,expected", [
+    # 講者在時間碼前面
+    (["演講者 1  00:04:07", "第一句。", "Speaker 2 (00:04:27)", "第二句。"],
+     [(247, "講者1", "第一句。"), (267, "講者2", "第二句。")]),
+    # 只有分:秒、括號、全形冒號
+    (["（4：07） 主席：開始開會。", "[4:27] 公路局：報告。"],
+     [(247, "主席", "開始開會。"), (267, "公路局", "報告。")]),
+    # 時間碼與講者之間有分隔符號、講者（疑似）
+    (["00:00:05 - 講者3（疑似）", "嗯，好。"], [(5, "講者3", "嗯，好。")]),
+    # 內容裡的「1:20」不是時間碼（檔案時間碼都有「時」）
+    (["00:01:00 說話者 1", "這個", "1:20 的比例很高", "00:01:30 說話者 2", "了解。"],
+     [(60, "講者1", "這個\n1:20 的比例很高"), (90, "講者2", "了解。")]),
+    # 時間倒退的行視為內容
+    (["00:10:00 主席：大家好", "00:02:00 這只是內容裡提到的時間", "00:10:30 主席：開始"],
+     [(600, "主席", "大家好\n00:02:00 這只是內容裡提到的時間"), (630, "主席", "開始")]),
+])
+def test_parse_tolerant_variants(lines: list[str], expected: list[tuple[float, str, str]]) -> None:
+    segs, timed = parse_lines(lines)
+    assert timed
+    assert [(s.start, s.speaker, s.text) for s in segs] == expected
+
+
+def test_uncertain_flag_kept() -> None:
+    segs, _ = parse_lines(["00:00:05 - 講者3（疑似）", "嗯，好。"])
+    assert segs[0].speaker_uncertain
+
+
 def test_parse_plain_lines_without_timecodes() -> None:
     segs, timed = parse_lines(["主席：開會。", "", "這是一段沒有講者的文字"])
     assert not timed
