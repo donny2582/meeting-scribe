@@ -1,6 +1,7 @@
 """主視窗：所有功能整合在同一個視窗的分頁中。
 
-分頁：轉錄｜引擎評估｜詞庫｜API 金鑰｜服務與費用
+分頁：轉錄｜引擎評估｜詞庫｜API 金鑰
+- 引擎、會議語言、輸出資料夾在「轉錄」分頁選擇，程式會記住上次的選擇（不另設預設值分頁）。
 - 工作分頁的主要按鈕（藍色）在分頁下方，執行時顯示進度、經過時間與執行紀錄，可以取消。
 - 按下執行時會先自動儲存設定、檢查金鑰與 ffmpeg；缺少時直接切到對應分頁並說明。
 - 底部工具列：開啟設定檔（進階）、開啟日誌、建立桌面捷徑、儲存設定、結束。
@@ -30,7 +31,7 @@ from meeting_scribe import config as app_config
 from meeting_scribe import tasks
 from meeting_scribe.gui.icon import make_pixmap
 from meeting_scribe.gui.pages import BenchmarkPage, GlossaryPage, TranscribePage
-from meeting_scribe.gui.settings import KeysPage, ServicesPage
+from meeting_scribe.gui.settings import KeysPage
 from meeting_scribe.gui.widgets import APP_STYLE, open_path, primary_button
 from meeting_scribe.postprocess.lang_detect import LanguageRegistry
 
@@ -64,9 +65,7 @@ class MainWindow(QMainWindow):
         self.benchmark = BenchmarkPage(self, self.cfg, out)
         self.glossary = GlossaryPage(on_changed=self._glossaries_changed)
         self.keys = KeysPage(lambda: self.cfg, **(secret_store or {}))
-        self.services = ServicesPage(self.cfg, self.registry)
         self.keys.keys_changed.connect(self.engines_changed)
-        self.services.changed.connect(self.engines_changed)
 
         self.tabs = QTabWidget()
         self._pages = {
@@ -74,7 +73,6 @@ class MainWindow(QMainWindow):
             "benchmark": (self.benchmark, "引擎評估"),
             "glossary": (self.glossary, "詞庫"),
             "keys": (self.keys, "API 金鑰"),
-            "services": (self.services, "服務與費用"),
         }
         for page, label in self._pages.values():
             self.tabs.addTab(page, label)
@@ -95,7 +93,7 @@ class MainWindow(QMainWindow):
             bottom.addWidget(b)
         bottom.addStretch(1)
         self.save_button = primary_button("儲存設定")
-        self.save_button.setToolTip("儲存「API 金鑰」與「服務與費用」分頁的變更（Ctrl+S）")
+        self.save_button.setToolTip("儲存金鑰、區域與模型設定，以及「轉錄」分頁的選擇（Ctrl+S）")
         self.save_button.clicked.connect(lambda: self.save_settings())
         quit_button = QPushButton("結束")
         quit_button.clicked.connect(self.close)
@@ -123,7 +121,7 @@ class MainWindow(QMainWindow):
 
     def engines_changed(self) -> None:
         """依目前選擇的引擎更新金鑰分頁的「需要」提示。"""
-        engines = {self.services.engine(), *self.transcribe.selected_engines(),
+        engines = {*self.transcribe.selected_engines(),
                    *self.benchmark.selected_engines()}
         self.keys.set_needed({app_config.ENGINE_KEYS[e] for e in engines if e in app_config.ENGINE_KEYS})
 
@@ -143,9 +141,9 @@ class MainWindow(QMainWindow):
             return None
         az = self.cfg.get("stt", {}).get("azure", {})
         if "azure" in engines and not (az.get("region") or az.get("endpoint")):
-            self.go_to("services")
-            self.services.azure_region.setFocus()
-            QMessageBox.warning(self, "缺少 Azure 區域", "請在「服務與費用」分頁選擇 Azure 資源所在區域。")
+            self.go_to("keys")
+            self.keys.azure_region.setFocus()
+            QMessageBox.warning(self, "缺少 Azure 區域", "請在「API 金鑰」分頁的 Azure 區塊選擇區域。")
             return None
         if engines:
             from meeting_scribe.audio.preprocess import AudioError, find_ffmpeg
@@ -161,10 +159,8 @@ class MainWindow(QMainWindow):
     def save_settings(self, quiet: bool = False) -> bool:
         """儲存已輸入的金鑰與設定；quiet=True 時只在狀態列提示。"""
         saved_keys = self.keys.save_pending()
-        updates = self.services.updates()
-        updates["ui"] = {"last_languages": self.transcribe.languages.codes()}
         try:
-            app_config.save_user_overrides(updates)
+            app_config.save_user_overrides(self._settings_updates())
             self.cfg = app_config.load_config()
         except Exception as exc:  # noqa: BLE001 - 顯示給使用者
             QMessageBox.critical(self, "儲存失敗", f"無法儲存設定：{exc}")
@@ -174,6 +170,16 @@ class MainWindow(QMainWindow):
         if not quiet:
             QMessageBox.information(self, "儲存設定", msg + "。")
         return True
+
+    def _settings_updates(self) -> dict[str, Any]:
+        """要寫入設定檔的內容：各服務的區域與模型，以及「轉錄」分頁的選擇（下次開啟時沿用）。"""
+        out = self.transcribe.output.path()
+        default_out = app_config.output_dir({})
+        return {
+            "general": {"output_dir": "" if out is None or out == default_out else str(out)},
+            "stt": {**self.keys.updates(), "default_engine": self.transcribe.selected_engines()[0]},
+            "ui": {"last_languages": self.transcribe.languages.codes()},
+        }
 
     def _open_config(self) -> None:
         path = app_config.init_user_config()
@@ -201,7 +207,7 @@ class MainWindow(QMainWindow):
 
     def _first_tab(self) -> None:
         """第一次使用（預設引擎沒有金鑰）時先開「API 金鑰」分頁。"""
-        if tasks.missing_keys([self.services.engine()]):
+        if tasks.missing_keys([self.cfg.get("stt", {}).get("default_engine", "azure")]):
             self.go_to("keys")
             self.statusBar().showMessage("第一次使用：請先貼上 API 金鑰並按「儲存」。", 15000)
 
@@ -234,6 +240,10 @@ class MainWindow(QMainWindow):
                 return
             if answer == QMessageBox.StandardButton.Save:
                 self.keys.save_pending()
+        try:
+            app_config.save_user_overrides(self._settings_updates())  # 記住這次的選擇
+        except Exception:  # noqa: BLE001, S110 - 關閉時無法存檔不影響結束
+            pass
         event.accept()
 
 

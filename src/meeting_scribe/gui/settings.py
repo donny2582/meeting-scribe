@@ -1,8 +1,10 @@
-"""設定分頁（SPEC 4.4）：「API 金鑰」與「服務與費用」。
+"""「API 金鑰」分頁（SPEC 4.4）。
 
+- 每個服務一個區塊：金鑰，以及該服務需要的附加設定（Azure 區域、模型名稱）。
 - API 金鑰存在 Windows 認證管理員，畫面只顯示末 4 碼；狀態以顏色區分：
   綠＝已設定、紅＝目前選的引擎需要但尚未設定、灰＝目前用不到。
-- 其他設定寫入使用者設定檔 ``%APPDATA%\\MeetingScribe\\config.toml``（只寫覆寫的項目）。
+- 附加設定寫入使用者設定檔 ``%APPDATA%\\MeetingScribe\\config.toml``（只寫覆寫的項目）。
+- 引擎、會議語言、輸出資料夾在「轉錄」分頁選擇，並記住上次的選擇；API 單價只在設定檔中調整。
 """
 
 from __future__ import annotations
@@ -17,7 +19,6 @@ from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
-    QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -25,13 +26,13 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
 
 from meeting_scribe import config as app_config
-from meeting_scribe.gui.widgets import ERROR_COLOR, OK_COLOR, FilePicker, LanguagePicker, hint, open_path
-from meeting_scribe.postprocess.lang_detect import LanguageRegistry
+from meeting_scribe.gui.widgets import ERROR_COLOR, OK_COLOR, hint
 
 AZURE_REGIONS = ["eastasia", "southeastasia", "japaneast", "japanwest", "koreacentral",
                  "eastus", "westus2", "westeurope"]
@@ -65,7 +66,7 @@ def check_key(name: str, key: str, cfg: dict[str, Any]) -> tuple[bool, str]:
             endpoint = (az.get("endpoint") or "").rstrip("/")
             if not endpoint:
                 if not az.get("region"):
-                    return False, "請先在「服務與費用」分頁選擇 Azure 區域"
+                    return False, "請先在下方選擇 Azure 區域"
                 endpoint = f"https://{az['region']}.api.cognitive.microsoft.com"
             resp = httpx.get(
                 f"{endpoint}/speechtotext/models/base",
@@ -123,9 +124,33 @@ class KeysPage(QWidget):
         self._signals = _TestSignals()
         self._signals.done.connect(self._on_test_done)
 
-        lay = QVBoxLayout(self)
-        lay.addWidget(hint("金鑰存在 Windows 認證管理員，不會寫進設定檔，畫面只顯示末 4 碼。"
+        cfg = cfg_provider()
+        stt = cfg.get("stt", {})
+        body = QWidget()
+        lay = QVBoxLayout(body)
+        lay.addWidget(hint("只需要設定你會用到的服務。金鑰存在 Windows 認證管理員，不會寫進設定檔，畫面只顯示末 4 碼。"
                            "貼上後按該列的「儲存」；「測試連線」會確認金鑰是否有效。"))
+
+        # 各服務的附加設定（金鑰以外）
+        self.azure_region = QComboBox()
+        self.azure_region.setEditable(True)
+        self.azure_region.addItems(AZURE_REGIONS)
+        self.azure_region.setCurrentText(stt.get("azure", {}).get("region", ""))
+        self.azure_region.lineEdit().setPlaceholderText("申請 Azure 語音服務時選的區域，例：eastasia")
+        self.azure_endpoint = QLineEdit(stt.get("azure", {}).get("endpoint", ""))
+        self.azure_endpoint.setPlaceholderText("通常留空")
+        self.openai_model = QLineEdit(stt.get("openai", {}).get("model", ""))
+        self.openai_model.setPlaceholderText("通常不用改")
+        self.soniox_model = QLineEdit(stt.get("soniox", {}).get("model", ""))
+        self.soniox_model.setPlaceholderText("通常不用改")
+        extras: dict[str, list[tuple[str, QWidget]]] = {
+            "azure_speech_key": [("區域：", self.azure_region), ("自訂端點：", self.azure_endpoint)],
+            "openai_api_key": [("模型名稱：", self.openai_model)],
+            "soniox_api_key": [("模型名稱：", self.soniox_model)],
+        }
+        notes = {
+            "soniox_api_key": "Soniox 的中文會自動轉成臺灣繁體與臺灣用語；產生會議紀錄前，再由 AI 做臺灣在地化校潤。",
+        }
         for name, label in app_config.SECRET_NAMES.items():
             box = QGroupBox(label)
             v = QVBoxLayout(box)
@@ -149,11 +174,37 @@ class KeysPage(QWidget):
                 row.addWidget(w)
             v.addWidget(status)
             v.addLayout(row)
+            if name in extras:
+                form = QFormLayout()
+                for text, widget in extras[name]:
+                    form.addRow(text, widget)
+                v.addLayout(form)
             v.addWidget(hint(f"取得方式：{KEY_HELP.get(name, '')}"))
+            if name in notes:
+                v.addWidget(hint(notes[name]))
             lay.addWidget(box)
             self.rows[name] = KeyRow(name, status, edit, show, save, test, clear)
         lay.addStretch(1)
+        area = QScrollArea()
+        area.setWidgetResizable(True)
+        area.setFrameShape(QScrollArea.Shape.NoFrame)
+        area.setWidget(body)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.addWidget(area)
         self.refresh()
+
+    def updates(self) -> dict[str, Any]:
+        """各服務附加設定（區域、模型名稱），寫入使用者設定檔用。"""
+        return {
+            "azure": {"region": self.azure_region.currentText().strip(),
+                      "endpoint": self.azure_endpoint.text().strip()},
+            "openai": {"model": self.openai_model.text().strip()},
+            "soniox": {"model": self.soniox_model.text().strip()},
+        }
+
+    def has_azure_location(self) -> bool:
+        return bool(self.azure_region.currentText().strip() or self.azure_endpoint.text().strip())
 
     def set_needed(self, needed: set[str]) -> None:
         """設定目前選的引擎需要哪些金鑰，並更新狀態顏色。"""
@@ -218,7 +269,7 @@ class KeysPage(QWidget):
         if not key:
             QMessageBox.information(self, "測試連線", "請先貼上金鑰。")
             return
-        cfg = self._cfg_provider()
+        cfg = app_config._deep_merge(self._cfg_provider(), {"stt": self.updates()})  # 用畫面上尚未儲存的值
         row.test.setEnabled(False)
         row.test.setText("測試中…")
 
@@ -237,129 +288,3 @@ class KeysPage(QWidget):
             QMessageBox.information(self, "測試連線", f"{label}：{msg}")
         else:
             QMessageBox.warning(self, "測試連線", f"{label}：{msg}")
-
-
-class ServicesPage(QWidget):
-    """「服務與費用」分頁：預設引擎、區域、模型、單價、預設語言、輸出資料夾。"""
-
-    changed = Signal()
-
-    def __init__(self, cfg: dict[str, Any], registry: LanguageRegistry) -> None:
-        super().__init__()
-        stt = cfg.get("stt", {})
-        lay = QVBoxLayout(self)
-
-        box = QGroupBox("語音轉文字引擎")
-        form = QFormLayout()
-        self.default_engine = QComboBox()
-        for code, label in ENGINES:
-            self.default_engine.addItem(label, code)
-        self.default_engine.setCurrentIndex(max(0, self.default_engine.findData(stt.get("default_engine"))))
-        self.default_engine.setToolTip("「轉錄」分頁預設使用的引擎。第 0 階段評估後再決定。")
-        self.azure_region = QComboBox()
-        self.azure_region.setEditable(True)
-        self.azure_region.addItems(AZURE_REGIONS)
-        self.azure_region.setCurrentText(stt.get("azure", {}).get("region", ""))
-        self.azure_region.lineEdit().setPlaceholderText("請選擇或輸入 Azure 資源所在區域，例：eastasia")
-        self.azure_endpoint = QLineEdit(stt.get("azure", {}).get("endpoint", ""))
-        self.azure_endpoint.setPlaceholderText("選填，例：https://<資源名稱>.cognitiveservices.azure.com")
-        self.openai_model = QLineEdit(stt.get("openai", {}).get("model", ""))
-        self.soniox_model = QLineEdit(stt.get("soniox", {}).get("model", ""))
-        self.soniox_model.setToolTip("Soniox 非同步模型名稱，例：stt-async-v6（官方改版時在此修改）")
-        form.addRow("預設引擎：", self.default_engine)
-        form.addRow("Azure 區域：", self.azure_region)
-        form.addRow("Azure 自訂端點：", self.azure_endpoint)
-        form.addRow("OpenAI 模型名稱：", self.openai_model)
-        form.addRow("Soniox 模型名稱：", self.soniox_model)
-        engine_box = QVBoxLayout(box)
-        engine_box.addLayout(form)
-        engine_box.addWidget(hint("Soniox 的中文輸出不保證是繁體：中文片段會先自動轉成臺灣繁體與臺灣用語，"
-                                  "之後產生會議紀錄前，再由 AI 做臺灣在地化校潤。"))
-        lay.addWidget(box)
-
-        box = QGroupBox("API 單價（請依官方價目表填寫）")
-        form = QFormLayout(box)
-        self.azure_price = self._price_box(stt.get("azure", {}).get("price_per_hour", 0.0))
-        self.openai_price = self._price_box(stt.get("openai", {}).get("price_per_hour", 0.0))
-        self.soniox_price = self._price_box(stt.get("soniox", {}).get("price_per_hour", 0.0))
-        self.cost = QLabel()
-        self.cost.setWordWrap(True)
-        form.addRow("Azure：", self.azure_price)
-        form.addRow("OpenAI：", self.openai_price)
-        form.addRow("Soniox：", self.soniox_price)
-        form.addRow("2 小時會議約：", self.cost)
-        lay.addWidget(box)
-
-        box = QGroupBox("預設值")
-        form = QFormLayout(box)
-        self.languages = LanguagePicker(registry, cfg.get("languages", {}).get("default", ["zh", "en"]))
-        self.output = FilePicker("dir", title="選擇輸出資料夾")
-        self.output.set_path(app_config.output_dir(cfg))
-        reset = QPushButton("還原預設")
-        reset.clicked.connect(lambda: self.output.set_path(app_config.output_dir({})))
-        open_btn = QPushButton("開啟資料夾")
-        open_btn.clicked.connect(self._open_output)
-        out_row = QHBoxLayout()
-        out_row.addWidget(self.output, 1)
-        out_row.addWidget(reset)
-        out_row.addWidget(open_btn)
-        form.addRow("會議語言：", self.languages)
-        form.addRow("輸出資料夾：", out_row)
-        lay.addWidget(box)
-        lay.addStretch(1)
-
-        for w in (self.azure_price, self.openai_price, self.soniox_price):
-            w.valueChanged.connect(self._refresh_cost)
-        self.default_engine.currentIndexChanged.connect(self.changed.emit)
-        self._refresh_cost()
-
-    @staticmethod
-    def _price_box(value: float) -> QDoubleSpinBox:
-        spin = QDoubleSpinBox()
-        spin.setRange(0.0, 1000.0)
-        spin.setDecimals(3)
-        spin.setSingleStep(0.1)
-        spin.setPrefix("US$ ")
-        spin.setSuffix(" ／音訊小時")
-        spin.setValue(float(value or 0.0))
-        return spin
-
-    def _refresh_cost(self) -> None:
-        parts = []
-        for label, spin in (("Azure", self.azure_price), ("OpenAI", self.openai_price),
-                            ("Soniox", self.soniox_price)):
-            parts.append(f"{label} US$ {spin.value() * 2:.2f}" if spin.value() else f"{label} 未設定單價")
-        self.cost.setText("；".join(parts))
-
-    def _open_output(self) -> None:
-        path = self.output.path() or app_config.output_dir({})
-        path.mkdir(parents=True, exist_ok=True)
-        open_path(path)
-
-    def engine(self) -> str:
-        return str(self.default_engine.currentData())
-
-    def updates(self) -> dict[str, Any]:
-        """要寫入使用者設定檔的項目。"""
-        out = self.output.path()
-        default_out = app_config.output_dir({})
-        return {
-            "general": {"output_dir": "" if out is None or out == default_out else str(out)},
-            "languages": {"default": self.languages.codes()},
-            "stt": {
-                "default_engine": self.engine(),
-                "azure": {
-                    "region": self.azure_region.currentText().strip(),
-                    "endpoint": self.azure_endpoint.text().strip(),
-                    "price_per_hour": round(self.azure_price.value(), 3),
-                },
-                "openai": {
-                    "model": self.openai_model.text().strip(),
-                    "price_per_hour": round(self.openai_price.value(), 3),
-                },
-                "soniox": {
-                    "model": self.soniox_model.text().strip(),
-                    "price_per_hour": round(self.soniox_price.value(), 3),
-                },
-            },
-        }

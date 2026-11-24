@@ -67,8 +67,10 @@ def test_first_run_opens_keys_tab(app: QApplication, env: dict[str, Any]) -> Non
 def test_save_key_and_settings(app: QApplication, env: dict[str, Any]) -> None:
     win = _window(env)
     win.keys.rows["azure_speech_key"].edit.setText("  az-new-key-1234  ")
-    win.services.azure_region.setCurrentText("eastasia")
-    win.services.azure_price.setValue(1.5)
+    win.keys.azure_region.setCurrentText("eastasia")
+    win.keys.soniox_model.setText("stt-async-v7")
+    win.transcribe.engine.setCurrentIndex(win.transcribe.engine.findData("soniox"))
+    win.transcribe.languages.set_codes(["zh", "ja"])
     assert win.save_settings(quiet=True)
     assert env["store"]["azure_speech_key"] == "az-new-key-1234"
     assert env["store"]["openai_api_key"] == "sk-old-9999"
@@ -76,9 +78,24 @@ def test_save_key_and_settings(app: QApplication, env: dict[str, Any]) -> None:
     with open(env["tmp"] / "appdata" / "MeetingScribe" / "config.toml", "rb") as f:
         saved = tomllib.load(f)
     assert saved["stt"]["azure"]["region"] == "eastasia"
-    assert saved["stt"]["azure"]["price_per_hour"] == 1.5
+    assert saved["stt"]["soniox"]["model"] == "stt-async-v7"
+    assert saved["stt"]["default_engine"] == "soniox"  # 記住轉錄分頁的引擎
+    assert saved["ui"]["last_languages"] == ["zh", "ja"]
     assert saved["general"]["output_dir"] == ""  # 預設資料夾不寫入
-    assert "US$ 3.00" in win.services.cost.text()
+    assert "price_per_hour" not in saved["stt"]["azure"]  # 單價不由介面覆寫
+    win.close()
+
+    again = _window(env)  # 重新開啟時沿用上次的選擇
+    assert again.transcribe.engine.currentData() == "soniox"
+    assert again.transcribe.languages.codes() == ["zh", "ja"]
+    assert again.keys.azure_region.currentText() == "eastasia"
+    again.close()
+
+
+def test_no_services_tab(app: QApplication, env: dict[str, Any]) -> None:
+    win = _window(env)
+    labels = [win.tabs.tabText(i) for i in range(win.tabs.count())]
+    assert labels == ["轉錄", "引擎評估", "詞庫", "API 金鑰"]
     win.close()
 
 
@@ -105,8 +122,10 @@ def test_run_blocked_without_key(app: QApplication, env: dict[str, Any]) -> None
 def test_run_blocked_without_region(app: QApplication, env: dict[str, Any]) -> None:
     env["store"]["azure_speech_key"] = "k"
     win = _window(env)
+    win.go_to("transcribe")
     assert win.prepare_run(["azure"]) is None
-    assert win.tabs.currentWidget() is win.services
+    assert win.tabs.currentWidget() is win.keys
+    assert any("缺少 Azure 區域" in d for d in env["dialogs"])
     win.close()
 
 
