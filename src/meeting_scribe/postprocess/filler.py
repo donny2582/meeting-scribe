@@ -14,7 +14,7 @@ import logging
 import re
 import unicodedata
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -112,6 +112,7 @@ class CleanReport:
     dropped: int = 0
     ai_used: bool = False
     ai_error: str = ""
+    kept_indices: list[int] = field(default_factory=list)
 
 
 def _batches(items: list[tuple[str, str]], max_chars: int) -> list[list[tuple[str, str]]]:

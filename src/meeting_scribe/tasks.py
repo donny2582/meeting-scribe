@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -212,9 +212,77 @@ def clean_fillers(
     texts = [(f"S{i:05d}", s.text) for i, s in enumerate(segments)]
     max_chars = int(cfg.get("llm", {}).get("filler_batch_chars", 3000))
     cleaned, report = clean_texts(texts, rule, llm, max_chars, report_fn, checkpoint_file)
-    out = [s.model_copy(update={"text": cleaned[f"S{i:05d}"]}) for i, s in enumerate(segments)
-           if cleaned[f"S{i:05d}"].strip(" ，。、,.!?！？")]
+    kept = [i for i in range(len(segments)) if cleaned[f"S{i:05d}"].strip(" ，。、,.!?！？")]
+    report.kept_indices = kept  # 對應原始片段位置（摘要依據編號用）
+    out = [segments[i].model_copy(update={"text": cleaned[f"S{i:05d}"]}) for i in kept]
     return out, report
+
+
+def segment_id(index: int) -> str:
+    """片段編號：S0001、S0002…（對應「產出文件」表格的列，從 1 起算）。"""
+    return f"S{index + 1:04d}"
+
+
+@dataclass
+class MinutesOutput:
+    """AI 整理會議紀錄的結果。"""
+
+    summary: Any
+    validation: Any
+    preview_path: Path
+    json_path: Path
+
+
+def summarize_meeting(
+    doc: Any, pairs: list[tuple[int, Any]], cfg: dict[str, Any], out_dir: Path,
+    progress: ProgressCallback | None = None, cancel: CancelCheck | None = None,
+) -> MinutesOutput:
+    """AI 整理討論事項、結論、待辦與心智圖（第 2 階段），並寫出會議紀錄草稿（文字預覽）與 summary JSON。
+
+    pairs：（原始片段位置, 片段）— 片段文字可以是刪除贅字後的版本，編號仍對應原始位置。
+    """
+    from meeting_scribe import usage
+    from meeting_scribe.llm import LLM_PROVIDERS, create_llm, provider_of
+    from meeting_scribe.postprocess.localize import build_reference, load_term_map
+    from meeting_scribe.render.docx_transcript import output_filename
+    from meeting_scribe.render.minutes_text import render_minutes_text, write_minutes_text
+    from meeting_scribe.summarize.summarizer import SummaryError, make_line, summarize
+    from meeting_scribe.summarize.validator import validate_summary
+
+    report = _guard(progress, cancel)
+    label, key_name = LLM_PROVIDERS[provider_of(cfg)]
+    if not get_secret(key_name):
+        raise SummaryError(f"整理會議紀錄需要 AI：請先在「API 金鑰」分頁設定「文字整理處理」的 {label} 金鑰")
+    status = usage.budget_status(cfg)
+    if status.exceeded:
+        raise SummaryError(f"本月估計費用 US$ {status.used:.2f} 已達上限，未進行 AI 整理")
+    llm = create_llm(cfg)
+    report(0, f"AI 整理會議紀錄：{label} {llm.model_for('summary')}，會議類型「{doc.info.meeting_type}」")
+
+    lines = [make_line(segment_id(i), s.start, doc.display_name(s.speaker), s.text, s.speaker_uncertain)
+             for i, s in pairs]
+    speakers = list(dict.fromkeys(doc.display_name(s.speaker) for _, s in pairs))
+    info = doc.info.model_dump()
+    reference = build_reference(load_term_map(), load_glossaries(default_glossaries()))
+    summary = summarize(lines, info, speakers, llm, cfg, reference, report, Path(doc.folder) / "_work")
+
+    known = {segment_id(i) for i in range(len(doc.segments))}
+    uncertain = {segment_id(i) for i, s in enumerate(doc.segments) if s.speaker_uncertain}
+    validation = validate_summary(summary, known, uncertain)
+    detail = "、".join(f"{k} {v} 條" for k, v in validation.reasons.items())
+    report(100, f"依據驗證：共 {validation.items} 條，{validation.pending} 條標記（待查證）"
+                + (f"（{detail}）" if detail else "") + (f"；移除 {validation.removed_ids} 個不存在的片段編號"
+                                                       if validation.removed_ids else ""))
+
+    times = {segment_id(i): (s.start, doc.display_name(s.speaker)) for i, s in enumerate(doc.segments)}
+    want = {"discussion": doc.info.want_discussion, "conclusion": doc.info.want_conclusion,
+            "action_table": doc.info.want_action_table, "mindmap": doc.info.want_mindmap}
+    meeting_date = date.fromisoformat(doc.info.date)
+    name = output_filename("會議紀錄草稿", doc.info.title, meeting_date, ".txt")
+    preview = write_minutes_text(render_minutes_text(summary, info, times, want), out_dir / name)
+    json_path = Path(doc.folder) / f"summary_{doc.info.meeting_type}.json"
+    json_path.write_text(summary.model_dump_json(indent=1), encoding="utf-8")
+    return MinutesOutput(summary, validation, preview, json_path)
 
 
 def load_or_transcribe(cache: Path, reuse: bool, progress: ProgressCallback | None = None,

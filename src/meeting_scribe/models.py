@@ -36,6 +36,63 @@ class SttResult(BaseModel):
     clip_end: float | None = Field(default=None, description="只轉錄部分範圍時的終點（秒）")
 
 
+class SummaryItem(BaseModel):
+    """結論條目（SPEC 7.3）：可巢狀，最多 3 層。"""
+
+    role: str = Field(default="一般敘述", description="一般敘述／提問／回答／單位意見／主席裁示")
+    speaker: str = ""
+    text: str
+    evidence: list[str] = Field(default_factory=list, description="依據的逐字稿片段編號（S0001…）")
+    children: list[SummaryItem] = Field(default_factory=list)
+    pending: bool = Field(default=False, description="待查證（程式驗證找不到依據等）")
+    pending_reason: str = ""
+
+
+class ConclusionSection(BaseModel):
+    """結論大項：主題名稱、提問者或案由。"""
+
+    title: str
+    items: list[SummaryItem] = Field(default_factory=list)
+
+
+class DiscussionItem(BaseModel):
+    """討論事項。"""
+
+    title: str
+    children: list[str] = Field(default_factory=list)
+    evidence: list[str] = Field(default_factory=list)
+
+
+class ActionItem(BaseModel):
+    """待辦事項。"""
+
+    task: str
+    owner: str = "未提及"
+    due: str = "未提及"
+    evidence: list[str] = Field(default_factory=list)
+    pending: bool = False
+    pending_reason: str = ""
+
+
+class MindNode(BaseModel):
+    """心智圖節點（根節點＝會議名稱，最多 3 層，每個節點 ≤ 20 字）。"""
+
+    text: str
+    children: list[MindNode] = Field(default_factory=list)
+
+
+class Summary(BaseModel):
+    """LLM 摘要結果（SPEC 7.3）。"""
+
+    meeting_type: str
+    discussion_items: list[DiscussionItem] = Field(default_factory=list)
+    conclusions: list[ConclusionSection] = Field(default_factory=list)
+    action_items: list[ActionItem] = Field(default_factory=list)
+    mindmap: MindNode = Field(default_factory=lambda: MindNode(text=""))
+    warnings: list[str] = Field(default_factory=list)
+    model: str = ""
+
+
 class Segment(BaseModel):
     """後處理後的片段（SPEC 6.1，第 1 階段使用）。"""
 

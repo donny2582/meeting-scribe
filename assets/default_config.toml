@@ -76,7 +76,8 @@ summary_model = ""        # 第 2 階段設定
 translate_model = ""
 filler_model = ""
 # 註：目前的 Claude 模型不接受 temperature 參數（SPEC 7.5 的低溫度改以 effort 控制）
-max_chars_single_pass = 60000
+max_chars_single_pass = 60000   # 逐字稿超過此字數時改為每 20 分鐘一段整理再合併
+summary_max_tokens = 32000      # 整理會議紀錄的輸出上限（含推理），超過 16000 時自動使用串流
 
 # 各工作使用的模型（可在「API 金鑰」分頁的下拉選單修改；選項與建議見 assets/model_catalog.toml）
 # localize＝臺灣在地化、filler＝刪除贅字、translate＝外語翻譯、summary＝整理討論事項、結論、待辦

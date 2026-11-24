@@ -42,7 +42,7 @@ from PySide6.QtWidgets import (
 )
 
 from meeting_scribe.config import output_dir
-from meeting_scribe.gui.widgets import OK_COLOR, RunPanel, hint, open_path, primary_button
+from meeting_scribe.gui.widgets import OK_COLOR, WARN_COLOR, RunPanel, hint, open_path, primary_button
 from meeting_scribe.render.roc_date import format_roc_date, format_roc_time, parse_hhmm, round_to_minutes
 from meeting_scribe.transcript_io import (
     DOCUMENT_FILE,
@@ -220,8 +220,8 @@ class DocumentPage(QWidget):
         clean_row.addWidget(self.want_clean)
         clean_row.addStretch(1)
         v.addLayout(clean_row)
-        v.addWidget(hint("會議紀錄（討論事項、結論、待辦事項表）與心智圖需要 AI 整理討論內容，"
-                         "第 2、3 階段完成後產出；目前先產出逐字稿 .docx，這裡的選擇會先存起來。"))
+        v.addWidget(hint("勾選討論事項、結論、待辦事項表或心智圖時，會由 AI 依會議類型整理（「整理討論事項、結論、待辦」模型），"
+                         "每條附依據時間碼，找不到依據的標「（待查證）」；目前先輸出文字草稿，Word 排版與心智圖圖檔於第 3 階段完成。"))
         lay.addWidget(self.output_box)
 
         # ---- 產出 ----
@@ -234,10 +234,15 @@ class DocumentPage(QWidget):
         self.open_folder.clicked.connect(self._open_folder)
         self.open_file = QPushButton("開啟逐字稿")
         self.open_file.clicked.connect(lambda: self.last_output and open_path(self.last_output))
+        self.last_minutes: Path | None = None
+        self.open_minutes = QPushButton("開啟會議紀錄草稿")
+        self.open_minutes.setToolTip("AI 整理的討論事項、結論、待辦（文字預覽，含依據時間碼與待查證標記）")
+        self.open_minutes.setEnabled(False)
+        self.open_minutes.clicked.connect(lambda: self.last_minutes and open_path(self.last_minutes))
         self.produce_button = primary_button("產出文件")
         self.produce_button.clicked.connect(self.produce)
         run.addStretch(1)
-        for b in (self.save_button, self.open_folder, self.open_file, self.produce_button):
+        for b in (self.save_button, self.open_folder, self.open_file, self.open_minutes, self.produce_button):
             run.addWidget(b)
         self.folder_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         lay.addWidget(self.folder_label)
@@ -556,23 +561,26 @@ class DocumentPage(QWidget):
             return
         doc = self.doc.model_copy(deep=True)  # 背景產出時使用當下的內容，不受之後的編輯影響
         out_dir = Path(doc.folder) / "輸出"
-        pending = [name for name, on in (("會議紀錄（討論事項、結論、待辦事項表）", self.want_discussion.isChecked()
-                                          or self.want_conclusion.isChecked() or self.want_action_table.isChecked()),
-                                         ("心智圖", self.want_mindmap.isChecked())) if on]
+        want_ai = any(cb.isChecked() for cb in (self.want_discussion, self.want_conclusion,
+                                                self.want_action_table, self.want_mindmap))
         self.result_label.setText("")
         clean = self.want_clean.isChecked()
         cfg = self.host.cfg
         registry = self.host.registry
 
-        def work(progress: Any, cancel: Any) -> Path:
+        def work(progress: Any, cancel: Any) -> dict[str, Any]:
             from meeting_scribe import tasks
+            from meeting_scribe.llm.base import LLMError
+            from meeting_scribe.summarize.summarizer import SummaryError
 
             progress(0, f"已儲存會議資訊與修改（{len(doc.segments)} 段、{len(doc.speakers())} 位講者）")
+            pairs = list(enumerate(doc.segments))  # （原始位置, 片段）：摘要依據編號對應原始位置
             if clean:
                 before = sum(len(s.text) for s in doc.segments)
-                doc.segments, rep = tasks.clean_fillers(doc.segments, cfg, registry, progress, cancel,
-                                                        Path(doc.folder) / "_work" / "filler.json")
-                after = sum(len(s.text) for s in doc.segments)
+                cleaned, rep = tasks.clean_fillers(doc.segments, cfg, registry, progress, cancel,
+                                                   Path(doc.folder) / "_work" / "filler.json")
+                pairs = list(zip(rep.kept_indices, cleaned, strict=True))
+                after = sum(len(s.text) for s in cleaned)
                 detail = (f"AI 處理 {rep.ai_batches} 批" + (f"、沿用先前 {rep.reused_batches} 批" if rep.reused_batches else "")
                           + (f"、{rep.ai_rejected} 段 AI 結果未通過驗證改用規則" if rep.ai_rejected else "")
                           if rep.ai_used else "只用規則")
@@ -581,18 +589,42 @@ class DocumentPage(QWidget):
                 if rep.ai_error:
                     progress(0, f"AI 刪除贅字中斷（{rep.ai_error}），其餘段落已用規則處理；"
                                 "補足後再按「產出文件」，已完成的批次不會重複計費")
-            path = render_transcript(doc, out_dir, progress=progress)
-            for name in pending:
-                progress(100, f"{name}：需要 AI 整理，第 2、3 階段完成後產出（本次略過）")
-            return path
+            result: dict[str, Any] = {"minutes": None, "minutes_error": ""}
+            if want_ai:
+                try:
+                    result["minutes"] = tasks.summarize_meeting(doc, pairs, cfg, out_dir, progress, cancel)
+                    progress(100, f"會議紀錄草稿（文字預覽）：{result['minutes'].preview_path.name}")
+                except (SummaryError, LLMError) as exc:
+                    result["minutes_error"] = str(exc)
+                    setup_issue = any(k in str(exc) for k in ("需要 AI", "已達上限"))
+                    tail = ("逐字稿照常產出" if setup_issue else
+                            "逐字稿照常產出；已完成的部分有存檔，再按「產出文件」會從中斷處繼續，不重複計費")
+                    progress(100, f"AI 整理會議紀錄未完成：{exc}（{tail}）")
+            clean_doc = doc.model_copy(update={"segments": [s for _, s in pairs]})
+            result["transcript"] = render_transcript(clean_doc, out_dir, progress=progress)
+            if want_ai:
+                progress(100, "會議紀錄 Word 檔與心智圖圖檔：第 3 階段（排版）完成後產出；目前先提供文字草稿核對內容")
+            return result
 
         self.panel.start("產出文件", work, self._produced)
 
-    def _produced(self, path: Path) -> None:
+    def _produced(self, result: dict[str, Any]) -> None:
+        path = result["transcript"]
         self.last_output = path
         self.open_file.setEnabled(True)
         self.panel.append(f"輸出檔案：{path}")
-        self.result_label.setText(f"<span style='color:{OK_COLOR}'><b>✔ 已產出逐字稿：</b></span>{path.name}")
+        lines = [f"<span style='color:{OK_COLOR}'><b>✔ 已產出逐字稿：</b></span>{path.name}"]
+        minutes = result.get("minutes")
+        if minutes is not None:
+            self.last_minutes = minutes.preview_path
+            self.open_minutes.setEnabled(True)
+            v = minutes.validation
+            lines.append(f"<span style='color:{OK_COLOR}'><b>✔ 已產出會議紀錄草稿：</b></span>"
+                         f"{minutes.preview_path.name}（{v.items} 條，{v.pending} 條待查證）")
+            self.panel.append(f"輸出檔案：{minutes.preview_path}")
+        elif result.get("minutes_error"):
+            lines.append(f"<span style='color:{WARN_COLOR}'><b>會議紀錄未完成：</b></span>{result['minutes_error']}")
+        self.result_label.setText("<br>".join(lines))
         self.host.statusBar().showMessage(f"已產出：{path}", 8000)
 
     def _on_busy(self, busy: bool) -> None:

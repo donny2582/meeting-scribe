@@ -93,17 +93,17 @@ def test_edit_rename_merge_and_produce(win: Any, tmp_path: Path, monkeypatch: py
     page.want_mindmap.setChecked(True)
     page.produce()
     assert not page.produce_button.isEnabled()  # 產出中鎖住
-    for _ in range(200):
+    for _ in range(1500):
         QCoreApplication.processEvents()
         if not page.panel.running:
             break
         QTest.qWait(10)
 
-    assert page.last_output is not None and page.last_output.exists()
     log = page.panel.log.toPlainText()
+    assert page.last_output is not None and page.last_output.exists(), log
     for expected in ("講者命名：講者3 → 公路局", "開始：產出文件", "只用規則刪除贅字", "刪除贅字完成：",
                      "寫入講者對照表", "寫入逐字稿內容",
-                     "儲存檔案：逐字稿_", "心智圖：需要 AI 整理", "輸出檔案："):
+                     "儲存檔案：逐字稿_", "AI 整理會議紀錄未完成：整理會議紀錄需要 AI", "輸出檔案："):
         assert expected in log, expected
     assert page.panel.status.text() == "完成" and page.panel.elapsed.text().startswith("已經過")
     assert page.produce_button.isEnabled()

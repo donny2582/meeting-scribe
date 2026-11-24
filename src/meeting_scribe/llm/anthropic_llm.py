@@ -59,8 +59,16 @@ class AnthropicLLM(LLMClient):
             "output_config": output_config,
         }
         try:
+            stream = max_tokens > 16000  # 輸出很長時用串流，避免 HTTP 逾時
             if self.use_fallbacks:
-                response = self.client.beta.messages.create(betas=[FALLBACK_BETA], fallbacks="default", **kwargs)
+                if stream:
+                    with self.client.beta.messages.stream(betas=[FALLBACK_BETA], fallbacks="default", **kwargs) as s:
+                        response = s.get_final_message()
+                else:
+                    response = self.client.beta.messages.create(betas=[FALLBACK_BETA], fallbacks="default", **kwargs)
+            elif stream:
+                with self.client.messages.stream(**kwargs) as s:
+                    response = s.get_final_message()
             else:
                 response = self.client.messages.create(**kwargs)
         except anthropic.AuthenticationError as exc:
