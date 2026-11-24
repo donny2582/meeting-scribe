@@ -44,10 +44,29 @@ def find_ffmpeg(cfg: dict[str, Any] | None = None) -> Path:
     which = shutil.which("ffmpeg")
     if which:
         return Path(which)
+    for found in _winget_locations():  # 剛用 winget 安裝、程式還沒重開時 PATH 尚未更新
+        return found
     raise AudioError(
-        "找不到 ffmpeg。請把 ffmpeg.exe 放到 assets\\ffmpeg\\，"
-        "或執行 winget install Gyan.FFmpeg 後重新開啟終端機。"
+        "找不到 ffmpeg（處理錄音檔的免費工具：轉換格式、剪出語音範圍、切段，轉錄前一定要有）。\n\n"
+        "安裝方式：在開始功能表搜尋「PowerShell」並開啟，輸入下面這行後按 Enter，等它顯示安裝完成：\n"
+        "winget install Gyan.FFmpeg\n\n"
+        "裝好後回到本程式再按一次即可，不需要重新開機。（正式版的安裝檔會內附，不必另外安裝。）"
     )
+
+
+def _winget_locations() -> list[Path]:
+    """winget 安裝 ffmpeg 的常見位置（使用者範圍）。"""
+    import os
+
+    local = os.environ.get("LOCALAPPDATA")
+    if not local:
+        return []
+    base = Path(local) / "Microsoft" / "WinGet"
+    found = [p for p in [base / "Links" / "ffmpeg.exe"] if p.is_file()]
+    packages = base / "Packages"
+    if packages.is_dir():
+        found += sorted(packages.glob("Gyan.FFmpeg*/*/bin/ffmpeg.exe"), reverse=True)
+    return found
 
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess[bytes]:
