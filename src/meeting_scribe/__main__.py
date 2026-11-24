@@ -14,9 +14,9 @@ def main() -> int:
         from meeting_scribe.cli import main as cli_main
 
         return cli_main(sys.argv[1:])
-    from meeting_scribe.gui.settings import run_settings
+    from meeting_scribe.gui.main_window import run_gui
 
-    return run_settings()
+    return run_gui()
 
 
 if __name__ == "__main__":

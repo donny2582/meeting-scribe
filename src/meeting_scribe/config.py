@@ -55,6 +55,37 @@ def user_config_path() -> Path:
     return appdata_dir() / "config.toml"
 
 
+#: 每個 STT 引擎需要的金鑰
+ENGINE_KEYS: dict[str, str] = {"azure": "azure_speech_key", "openai": "openai_api_key"}
+
+
+def documents_dir() -> Path:
+    """回傳使用者的「文件」資料夾（支援 OneDrive 重新導向）。"""
+    if sys.platform == "win32":
+        import ctypes
+
+        buf = ctypes.create_unicode_buffer(260)
+        if ctypes.windll.shell32.SHGetFolderPathW(None, 5, None, 0, buf) == 0 and buf.value:  # CSIDL_PERSONAL
+            return Path(buf.value)
+    return Path.home() / "Documents"
+
+
+def output_dir(cfg: dict[str, Any]) -> Path:
+    """輸出資料夾：設定值，空白時為「文件\\MeetingScribe\\輸出」。"""
+    configured = (cfg.get("general", {}).get("output_dir") or "").strip()
+    return Path(configured) if configured else documents_dir() / APP_NAME / "輸出"
+
+
+def user_glossary_dir() -> Path:
+    """使用者詞庫資料夾 ``%APPDATA%\\MeetingScribe\\glossary``；第一次使用時複製初始詞庫。"""
+    path = appdata_dir() / "glossary"
+    if not path.exists():
+        path.mkdir(parents=True, exist_ok=True)
+        for seed in (assets_dir() / "glossary").glob("seed_*.csv"):
+            shutil.copyfile(seed, path / seed.name.removeprefix("seed_"))
+    return path
+
+
 def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     """把 override 遞迴合併到 base 的複本。"""
     result = copy.deepcopy(base)
