@@ -1,158 +1,105 @@
 # 會議紀錄產生器（MeetingScribe）
 
-把 1–3 小時的會議錄音自動轉成**會議紀錄初稿 .docx**、**逐字稿 .docx** 與**心智圖**，再由紀錄人員人工校對後陳核。
-完整需求見 [SPEC.md](SPEC.md)，開發守則見 [CLAUDE.md](CLAUDE.md)。
+把 1–3 小時的會議錄音自動轉成**會議紀錄初稿 .docx**（公文格式）、**逐字稿 .docx** 與**心智圖**（PNG／XMind），
+再由紀錄人員人工校對後陳核。Windows 桌面程式，**不需要安裝 Python**。
+
+## 下載安裝
+
+**[⬇ 下載安裝檔 MeetingScribe_Setup_0.5.0.exe](https://github.com/donny2582/meeting-scribe/releases/download/v0.5.0/MeetingScribe_Setup_0.5.0.exe)**
+（約 122 MB，Windows 10／11 64 位元）　｜　[所有版本（Releases）](https://github.com/donny2582/meeting-scribe/releases)
+
+1. 雙擊安裝檔。預設只裝給目前使用者，**不需要系統管理員權限**。
+   出現「Windows 已保護您的電腦」時，按「其他資訊」→「仍要執行」（安裝檔沒有數位簽章）。
+2. 從開始功能表或桌面開啟「**MeetingScribe 會議紀錄**」。
+3. 到「**API 金鑰**」分頁設定金鑰（見下一節）。
+
+> 0.5.0 為預覽版：已在開發電腦驗證安裝、執行與解除安裝，尚未在全新 Windows 上驗證。
+
+## 需要的 API 金鑰
+
+| 用途 | 選一個服務 | 申請網站 |
+|---|---|---|
+| 語音轉錄（錄音 → 逐字稿） | **Azure AI Speech** | <https://portal.azure.com>（建立「語音服務」資源 → 金鑰與端點） |
+| | **OpenAI** | <https://platform.openai.com/api-keys> |
+| | **Soniox** | <https://console.soniox.com> |
+| 文字整理處理（在地化、刪贅字、整理會議紀錄） | **Anthropic Claude** | <https://platform.claude.com>（Settings → API keys） |
+| | **OpenAI** | <https://platform.openai.com/api-keys> |
+
+逐步申請教學（含儲值、設定用量上限、金鑰安全）：**[API 金鑰申請說明](docs/API金鑰申請說明.md)**
+
+已有逐字稿檔、只要產出逐字稿 .docx 時不需要金鑰。
+
+## 文件
+
+| 文件 | 內容 |
+|---|---|
+| [程式使用說明書](docs/程式使用說明書.md) | 安裝、轉錄、修正逐字稿、產出會議紀錄與心智圖、費用、中斷續跑、常見問題 |
+| [API 金鑰申請說明](docs/API金鑰申請說明.md) | Azure、OpenAI、Anthropic Claude、Soniox 的申請步驟 |
+| [打包與部署](docs/打包與部署.md) | PyInstaller＋Inno Setup 打包、自我檢查、乾淨 Windows 驗證、靜默安裝、發佈到 GitHub Releases |
+| [程式架構說明](docs/程式架構說明.md) | 處理流程、模組說明、設定與資料位置、擴充方式 |
+| [SPEC.md](SPEC.md) | 需求規格書 |
+| [CLAUDE.md](CLAUDE.md) | 開發守則 |
+
+## 功能概要
+
+- **轉錄**：Azure／OpenAI／Soniox 雲端語音辨識，自動分辨講者；可只轉錄錄音中的一段（拉桿＋試聽），時間碼對應原始錄音。
+- **臺灣繁體**：中文輸出轉成臺灣繁體與臺灣用語（OpenCC＋AI 校潤）。
+- **產出文件**：修正逐字稿、講者命名與合併、填會議資訊；也可匯入既有的 txt／srt／docx 逐字稿。
+- **會議紀錄 .docx**：依三種會議類型（主題式、問答式、議程逐項式）整理討論事項、結論、待辦；每條結論以 Word 註解標出依據的錄音時間，不確定的內容黃色標示「待查證」。
+- **逐字稿 .docx**（可刪除贅字，只刪不改）、**心智圖 PNG／XMind**。
+- **詞庫**、**引擎評估**、**每月費用上限與用量**、**中斷後從中斷處繼續**（已付費的部分不重複計費）。
 
 ## 開發進度
 
 | 階段 | 內容 | 狀態 |
 |---|---|---|
-| 0 | 引擎評估（STT 介面、Azure、OpenAI、評估指令碼） | ✅ 程式完成，**待使用者以真實錄音評估** |
-| 1 | 核心管線（CLI） | 尚未開始 |
-| 2 | 摘要 | 🔧 程式完成（AI 依三種會議類型整理、依據驗證、分段合併、續跑），待以真實會議驗收 |
-| 3 | 輸出渲染 | 🔧 程式完成：會議紀錄 .docx（公文格式、Word 註解回溯、待查證黃色標示、待辦事項追蹤表）、逐字稿 .docx、心智圖 PNG 與 XMind；已用 Word 16 開啟驗證，XMind 尚待以 XMind 軟體開啟確認 |
-| 4 | GUI | 尚未開始 |
-| 5 | 打包 | 🔧 安裝檔完成，本機無 Python 環境驗證通過；Windows 沙箱乾淨環境驗證待執行 |
+| 0 | 引擎評估 | ✅ 程式完成，待使用者以真實錄音評估並選定預設引擎 |
+| 1 | 核心管線（CLI） | 🔧 轉錄、續跑、在地化已完成；外語翻譯、講者不確定標記尚未實作 |
+| 2 | 摘要 | 🔧 程式完成，已用真實會議試跑 |
+| 3 | 輸出渲染 | 🔧 程式完成，已用 Word 開啟驗證；XMind 待以 XMind 軟體確認 |
+| 4 | GUI | 🔧 整合式主視窗已完成（轉錄、產出文件、引擎評估、詞庫、API 金鑰） |
+| 5 | 打包 | 🔧 安裝檔完成並發佈 v0.5.0（預覽版）；乾淨 Windows 驗證待執行 |
+| 6 | 使用回饋調整 | 尚未開始 |
 
-## 開發環境安裝
+## 開發環境
 
-需求：Windows 10／11、Python 3.12（或 3.11）、ffmpeg。
+需求：Windows 10／11、Python 3.12（或 3.11）、ffmpeg（`winget install Gyan.FFmpeg`）。
 
 ```powershell
 .\scripts\setup.ps1
 ```
 
-- 找不到 Python 3.12／3.11 時會改用預設的 `python` 並顯示警告；可執行 `py install 3.12` 安裝 3.12。
-- ffmpeg：執行 `winget install Gyan.FFmpeg`，或把 `ffmpeg.exe` 放到 `assets\ffmpeg\`（不納入 git）。
-
-執行測試：
-
 ```powershell
-.\.venv\Scripts\python.exe -m pytest --cov=meeting_scribe
+.\scripts\run_dev.ps1
 ```
 
-## 打包與安裝檔
-
-需要 Inno Setup 6（`winget install JRSoftware.InnoSetup`）與 ffmpeg（`winget install Gyan.FFmpeg`）。
+```powershell
+.\.venv\Scripts\python.exe -m pytest
+```
 
 ```powershell
 .\scripts\build.ps1
 ```
 
-依序：複製 ffmpeg.exe 到 `assets\ffmpeg\` → 產生圖示 → PyInstaller（onedir）打包到 `dist\MeetingScribe\` →
-用打包版執行**自我檢查** → Inno Setup 產生 `dist\installer\MeetingScribe_Setup_{版本}.exe`。
+依序為：建立 .venv 並安裝相依套件、以開發模式開啟 GUI、執行全部測試、打包安裝檔（詳見[打包與部署](docs/打包與部署.md)）。
 
-- 安裝檔預設只裝給目前使用者（`%LOCALAPPDATA%\Programs\MeetingScribe`），**不需要系統管理員權限**，也不需要安裝 Python；
-  可勾選建立桌面捷徑。解除安裝時保留設定、金鑰與會議資料。
-- **自我檢查**（不需金鑰、不花費用，在本機完成一次處理：ffmpeg 轉檔、匯入逐字稿、刪除贅字、產出逐字稿 .docx、心智圖、開啟主視窗）：
-  `MeetingScribe.exe selftest --out 資料夾`，結果寫在該資料夾的 `selftest_report.txt`。
-- **乾淨 Windows 驗證**：啟用「Windows 沙箱」後執行 `.\scripts\test_clean_install.ps1`，
-  會在全新、沒有 Python 的 Windows 自動安裝並執行自我檢查，結果寫在 `dist\clean_install_result.txt`。
-- **程式圖示**：把正方形圖片（至少 256 × 256）存成 `assets\icon.png` 後重新打包；沒有這個檔案時使用內建的「紀」圖示。
+### 引擎評估（命令列）
 
-## 第 0 階段：STT 引擎評估
-
-## 圖形介面
-
-按兩下桌面的「**MeetingScribe 會議紀錄**」捷徑（或專案根目錄的 `MeetingScribe.cmd`）開啟主視窗。所有功能都整合在同一個視窗的分頁中：
-
-| 分頁 | 功能 |
-|---|---|
-| 轉錄 | 選擇（或拖放）錄音檔 →（選填）**語音範圍**：拖曳拉桿兩端的藍色把手、或輸入起點／終點時間，只轉錄其中一段，可用播放器（跳到起點、播放／暫停、停止、跳到終點前 5 秒）試聽確認，播到範圍終點自動停止；逐字稿時間碼對應原始錄音（不是從 0 開始）→ 引擎、會議語言、講者人數、詞庫、輸出資料夾 → 「開始轉錄」；引擎、語言、輸出資料夾會記住上次的選擇；**轉錄完成後自動切到「產出文件」** |
-| 產出文件 | 逐字稿來源：轉錄結果（自動帶入）、「匯入逐字稿檔案…」（已經有的 txt、srt、docx、json；txt 有容錯：時間碼可在行首或行尾、有無括號、可只有分:秒，講者可與內容同一行或單獨一行，例如會議軟體匯出的「00:04:07 演講者 1」換行再接內容；「演講者 1」「Speaker 1」統一為「講者1」）、「開啟已存的文件…」。1. 逐字稿內容：直接修正文字、改單一片段講者、講者命名、合併講者；2. 會議資訊：會議名稱、日期（民國年與星期）、開始／散會時間（散會預設＝開始＋錄音長度，四捨五入到 5 分鐘）、地點與主席（記住最近 10 筆）、紀錄、參加人員、議程；3. 產出項目：會議類型（主題式／問答式／議程逐項式）、討論事項、結論、待辦事項表、心智圖。「產出文件」目前產出**逐字稿 .docx**（SPEC 9.3 格式；勾選「刪除贅字」時先刪除贅字：規則層＋AI 層〔「刪除贅字」模型，預設 Haiku 5.5〕，AI 結果須通過「只刪不改」的子序列驗證，否則用規則結果；只影響產出的 Word 檔，畫面上的原文不變；每批存檔可續跑）；會議紀錄與心智圖待第 2、3 階段 |
-| 引擎評估 | 第 0 階段：步驟 1 產生標準答案草稿，用 Excel 校正後直接存回原檔（畫面會顯示「已校正」）→ 步驟 2「開始評估」自動使用該檔，比較表直接顯示在視窗中；草稿未校正時會提醒，重新產生草稿前會先備份已校正的檔案 |
-| 詞庫 | 用 Excel 開啟、新增、匯入、刪除詞庫 CSV；預設詞庫（道安業務）標示🔒，不可刪除，若在檔案總管被刪掉會自動補回；刪除自訂詞庫會移到資源回收筒，可以還原 |
-| API 金鑰 | 只有兩個區塊：**1. 語音轉錄**（選 Azure／OpenAI／Soniox，只顯示該服務的金鑰與區域或模型名稱，與「轉錄」分頁的引擎同步）、**2. 文字整理處理**（選 Anthropic Claude 或 OpenAI，用於臺灣繁體在地化與之後的會議紀錄摘要；兩邊都選 OpenAI 時共用同一把金鑰）。每把金鑰可儲存、測試連線、清除；綠色＝已設定、紅色＝需要但尚未設定、橘色＝建議設定 |
-
-**3. 費用**：設定每月費用上限（0＝不限制），並顯示本月已使用金額、進度條（用到 80% 變橘色、達上限變紅色）、各服務明細與累計。費用由本程式估算：語音轉錄＝錄音時數 × 每小時單價，文字整理＝tokens × 模型單價（`assets/model_catalog.toml`）；每次呼叫都記在 `%LOCALAPPDATA%\MeetingScribe\usage.csv`（可用 Excel 開啟，不含逐字稿內容）。達到上限時，「開始轉錄」等工作會被擋下並切到本區塊；臺灣在地化也會跳過。一般 API 金鑰無法查詢實際帳單，實際金額以各服務的帳單為準。
-
-### 中斷續跑（餘額不足、網路中斷、取消）
-
-已經付費完成的部分一完成就存檔，中斷後不會遺失，也不必從頭開始：
-
-| 情況 | 保存的內容 | 怎麼繼續 |
-|---|---|---|
-| 語音轉錄完成後，AI 在地化才中斷 | 轉錄結果 | 對同一個錄音檔再按「開始轉錄」：直接沿用轉錄結果，不重複計費 |
-| 分段轉錄（OpenAI 每 20 分鐘一段、Azure 超過 2 小時）中途中斷 | 已完成的每一段 | 再按「開始轉錄」：從下一段繼續 |
-| Soniox 已送出，但等候或取回結果時中斷 | 伺服器上的工作編號 | 再按「開始轉錄」：伺服器已完成就直接取回，不重新上傳 |
-| AI 臺灣在地化中途中斷 | 已完成的每一批 | 逐字稿先保留已完成的部分；再按「開始轉錄」只補做剩下的批次 |
-
-暫存放在 `%LOCALAPPDATA%\MeetingScribe\cache\`（依錄音檔與轉錄設定區分；換了語言、引擎或檔案內容就會重新處理），超過 30 天沒用會自動刪除。「引擎評估」為了量測處理時間，不使用暫存。產出逐字稿 .docx 不需要呼叫 API，不受餘額影響。
-
-語音轉錄的每小時單價（Soniox 預設 US$0.10；Azure、OpenAI 未設定時只記用量不計費）不放在介面上，需要時按「開啟設定檔（進階）」修改 `price_per_hour`。
-
-**模型選擇**：所有模型名稱都是下拉選單，右邊的「＋」可以新增清單裡沒有的模型名稱；「↻ 從服務更新模型清單」會用已設定的金鑰呼叫官方的「列出模型」API，把服務目前提供的模型加進選單（不抓網頁，廠商改版網頁也不受影響）。文字整理處理依工作分別選模型，預設採用建議值：
-
-| 工作 | Anthropic 建議 | OpenAI 建議 | 每場約（美元） |
-|---|---|---|---|
-| 臺灣在地化 | Opus 5.5 | GPT-6.2 Sol | 1.00（改用 Sonnet 5.5 約 0.50） |
-| 刪除贅字 | Haiku 5.5 | GPT-6 Luna | 0.03 |
-| 外語翻譯 | Sonnet 5.5 | GPT-6.2 Sol | 0.01–0.05 |
-| 整理討論事項、結論、待辦 | Sonnet 5.5（重要會議可選 Opus 5.5，約 2 倍） | GPT-6.2 Sol | 0.30 |
-
-模型清單與建議放在 `assets/model_catalog.toml`，廠商改版時修改這個檔案即可。
-
-- 工作分頁的藍色主要按鈕在分頁下方；執行時在背景進行，顯示進度、經過時間與執行紀錄，可以取消。
-- 按下執行時會先自動儲存設定，並檢查金鑰、Azure 區域與 ffmpeg；缺少時會直接切到對應分頁說明。
-- 第一次開啟時若預設引擎還沒有金鑰，會先顯示「API 金鑰」分頁。
-- 右上角「儲存程式設定」（Ctrl+S）：儲存金鑰、服務與模型、費用上限、轉錄偏好（滑鼠移上去會顯示說明）；逐字稿與會議資訊用「產出文件」分頁的「儲存修改」。
-- 底部工具列：開啟設定檔（進階）、開啟日誌、建立桌面捷徑、結束。
-- 金鑰存在 Windows 認證管理員（只顯示末 4 碼）；其他設定存在 `%APPDATA%\MeetingScribe\config.toml`；詞庫在 `%APPDATA%\MeetingScribe\glossary\`（第一次開啟時複製初始詞庫）。
-
-### 1. 設定金鑰與區域
-
-在「API 金鑰」分頁貼上要比較的服務金鑰並儲存；用 Azure 時在同一個區塊選擇區域。也可以用命令列 `set-key`、`show-keys`。
-
-### 2. 準備標準答案（命令列方式；圖形介面請用「引擎評估」分頁）
-
-先用引擎產生草稿，再人工校正（比從頭打字快）：
+圖形介面請用「引擎評估」分頁；命令列方式：先產生標準答案草稿，用 Excel 校正後另存為 `reference.csv`，再執行評估。
 
 ```powershell
-.\scripts\benchmark_stt.ps1 -Audio "D:\錄音\測試10分鐘.m4a" -MakeReference -LangAudio "D:\錄音\日韓3分鐘.m4a"
+.\scripts\benchmark_stt.ps1 -Audio "D:\錄音\測試10分鐘.m4a" -MakeReference
 ```
-
-用 Excel 開啟 `benchmark_out\reference_draft.csv`，逐列校正 `text`（文字）、`speaker`（講者，任意名稱）、`lang`（zh／en／ja／ko），另存為 `reference.csv`（CSV UTF-8）。語言測試錄音的 `reference_lang_draft.csv` 也照樣處理。
-
-### 3. 執行評估
 
 ```powershell
-.\scripts\benchmark_stt.ps1 -Audio "D:\錄音\測試10分鐘.m4a" -Reference .\benchmark_out\reference.csv -LangAudio "D:\錄音\日韓3分鐘.m4a" -LangReference .\benchmark_out\reference_lang.csv
+.\scripts\benchmark_stt.ps1 -Audio "D:\錄音\測試10分鐘.m4a" -Reference .\benchmark_out\reference.csv
 ```
 
-報告存在 `benchmark_out\benchmark_report.md`，包含 SPEC 5.3 的全部指標（CER、講者錯誤比例、詞庫命中率、語言判定正確率、中文誤判率、處理時間、費用）。
-轉錄結果會存在 `benchmark_out\_work\`；修改標準答案後加 `-Reuse` 只重算指標，不會重新呼叫 API。
-
-### 引擎實作重點
-
-- **Soniox**（非同步檔案轉錄，`stt-async-v6`）：上傳 → 建立轉錄（候選語言、語者辨識、語言辨識、詞庫詞彙放在 context）→ 輪詢 → 取得逐字 token 並依講者、語言、停頓組成片段 → 刪除 Soniox 上的檔案與轉錄。單檔上限 300 分鐘，一般會議不需切段。
-  **中文處理**：Soniox 的中文只有 `zh`，輸出不保證是臺灣繁體，因此：
-  1. 中文片段立即以 OpenCC（s2twp）轉成臺灣繁體與臺灣用語（日文、韓文片段不轉換）。
-  2. **有設定「文字整理處理」的金鑰時，轉錄完成當下**再由 AI 校潤成臺灣繁體中文與臺灣在地用語（Anthropic 預設 `claude-opus-5-5`、effort `low`；OpenAI 預設 `gpt-6.2-sol`、reasoning_effort `low`）：套用用語對照表與詞庫，只改字形與用語、不增刪內容；程式會驗證片段數量、順序與長度，不通過就保留 OpenCC 結果。使用 Anthropic 時，主要模型拒絕處理會自動改用備援模型（server-side fallback）。2 小時會議約 US$1。
-  3. 沒有金鑰或校潤失敗時，逐字稿草稿表頭會註明「尚未完成 AI 臺灣在地化」。
-
-  金鑰在 console.soniox.com 取得；選 Soniox 時，「文字整理處理」的金鑰會以橘色標示「建議設定」。
-
-- **Azure AI Speech 快速轉錄**：一次上傳整段錄音（不超過設定的長度與大小上限時不切段），送出候選語言、語者辨識與詞彙清單（phrase list）。若 API 回報不支援詞彙清單，可在設定中把 `send_phrase_list` 設為 `false`。
-- **OpenAI 具語者辨識的轉錄**：單檔大小有上限，一律切成每段 20 分鐘、重疊 30 秒的 mp3，再以重疊區域把各段講者串接起來；對應不到的講者標「（疑似）」（SPEC 5.2）。
-- 兩者都在網路錯誤或 429／5xx 時以指數退避重試 3 次；金鑰無效、額度不足會顯示明確原因。
-- 日誌位於 `%LOCALAPPDATA%\MeetingScribe\logs\`，不記錄逐字稿內容。
-
-## 專案結構
-
-依 SPEC 第 11 章建立；尚未實作的模組只有說明文字，會在對應的階段補上。另外新增：
-
-- `src/meeting_scribe/benchmark.py`：評估指標與報告
-- `src/meeting_scribe/tasks.py`：CLI 與 GUI 共用的核心工作（轉錄、標準答案草稿、引擎評估）
-- `src/meeting_scribe/gui/`：`main_window.py`（主視窗與分頁）、`pages.py`（轉錄、引擎評估、詞庫）、`settings.py`（API 金鑰與各服務附加設定）、`widgets.py`（共用元件、背景執行）、`icon.py`、`shortcut.py`
+報告存在 `benchmark_out\benchmark_report.md`，包含 SPEC 5.3 的全部指標（CER、講者錯誤比例、詞庫命中率、語言判定正確率、處理時間、費用）；
+加 `-Reuse` 只重算指標，不重新呼叫 API。
 
 ## 注意事項
 
-- 錄音檔、逐字稿、`benchmark_out\` 都已列入 `.gitignore`，不會進入版控。
-- 正式用於公務前，請先確認單位是否允許錄音上傳雲端（SPEC 13）。
-
-## 檔案存放位置
-
-| 位置 | 內容 |
-|---|---|
-| 輸出資料夾（預設 `文件\MeetingScribe\輸出`）\`{民國年月日}_{會議名稱}`\ | 只放成品：會議紀錄_….docx、逐字稿_….docx、心智圖_….png／.xmind；每場會議一個資料夾 |
-| `%LOCALAPPDATA%\MeetingScribe\jobs\` | 程式工作檔：document.json、stt_raw.json、逐字稿草稿.txt、AI 整理結果與續跑暫存（_work） |
+- 錄音檔、逐字稿、API 金鑰、`benchmark_out\`、`dist\`、`build\` 都不會進入版控。
+- 正式用於公務前，請先確認單位是否允許把會議錄音上傳到雲端服務（SPEC 13）。
+- 安裝檔內附 ffmpeg（GPL 授權，來源 <https://www.gyan.dev/ffmpeg/builds/>）。
