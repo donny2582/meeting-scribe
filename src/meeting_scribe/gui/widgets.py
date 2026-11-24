@@ -42,6 +42,7 @@ QGroupBox QLabel, QGroupBox QCheckBox, QGroupBox QLineEdit { font-weight: normal
 
 OK_COLOR = "#2e7d32"
 ERROR_COLOR = "#c62828"
+WARN_COLOR = "#e65100"
 
 
 def hint(text: str) -> QLabel:

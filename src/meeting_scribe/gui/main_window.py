@@ -123,7 +123,9 @@ class MainWindow(QMainWindow):
         """依目前選擇的引擎更新金鑰分頁的「需要」提示。"""
         engines = {*self.transcribe.selected_engines(),
                    *self.benchmark.selected_engines()}
-        self.keys.set_needed({app_config.ENGINE_KEYS[e] for e in engines if e in app_config.ENGINE_KEYS})
+        recommended = {"anthropic_api_key": "Soniox 的 AI 臺灣在地化會用到"} if "soniox" in engines else {}
+        self.keys.set_needed({app_config.ENGINE_KEYS[e] for e in engines if e in app_config.ENGINE_KEYS},
+                             recommended)
 
     def prepare_run(self, engines: list[str]) -> dict[str, Any] | None:
         """執行前：儲存設定 → 檢查金鑰、Azure 區域、ffmpeg。可以執行時回傳最新設定。"""

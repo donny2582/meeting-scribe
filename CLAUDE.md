@@ -13,9 +13,11 @@
 ## 使用者追加規則
 - **Soniox 引擎的中文處理**：Soniox 的中文只有 `zh`，輸出不保證是臺灣繁體。
   1. 轉錄後中文片段立即以 OpenCC s2twp 轉成臺灣繁體（日文、韓文片段不轉，避免日文漢字被改錯）。
-  2. 結果帶有 `SttResult.needs_zh_tw_localization = True`；第 1 階段後處理必須**最先**由 LLM 做
-     「臺灣繁體中文與在地化用語」校潤，再進行詞庫校正、翻譯、贅字刪除（細節見 `postprocess/localize.py`）。
-  3. 是否啟用由設定 `[stt.soniox] convert_zh_tw`、`llm_localize_zh_tw` 控制（預設皆開啟）。
+  2. **有 Anthropic API 金鑰時，轉錄完成當下立即**由 LLM 做「臺灣繁體中文與在地化用語」校潤
+     （`tasks.localize_if_possible` → `postprocess/localize.py`），之後的詞庫校正、翻譯、贅字刪除都以此為準。
+     沒有金鑰或 LLM 失敗時保留 OpenCC 結果，`needs_zh_tw_localization` 維持 True，第 1 階段後處理開始前要再補做。
+  3. 是否啟用由設定 `[stt.soniox] convert_zh_tw`、`llm_localize_zh_tw` 控制（預設皆開啟）；
+     LLM 模型、effort、批次大小在 `[llm] localize_*`（預設 claude-opus-5-5、effort low）。
 
 ## 目前進度
 - 第 0 階段（引擎評估）：程式已完成，待使用者以真實錄音執行評估並選定預設引擎。

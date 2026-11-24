@@ -32,7 +32,7 @@ from PySide6.QtWidgets import (
 )
 
 from meeting_scribe import config as app_config
-from meeting_scribe.gui.widgets import ERROR_COLOR, OK_COLOR, hint
+from meeting_scribe.gui.widgets import ERROR_COLOR, OK_COLOR, WARN_COLOR, hint
 
 AZURE_REGIONS = ["eastasia", "southeastasia", "japaneast", "japanwest", "koreacentral",
                  "eastus", "westus2", "westeurope"]
@@ -41,7 +41,7 @@ KEY_HELP = {
     "azure_speech_key": "Azure 入口網站 → 語音服務資源 →「金鑰與端點」",
     "openai_api_key": "platform.openai.com → API keys",
     "soniox_api_key": "console.soniox.com → 專案 → API Keys",
-    "anthropic_api_key": "console.anthropic.com → API Keys（第 1 階段臺灣在地化、第 2 階段摘要使用）",
+    "anthropic_api_key": "console.anthropic.com → API Keys（臺灣繁體在地化、之後的會議紀錄摘要使用）",
 }
 
 
@@ -149,7 +149,10 @@ class KeysPage(QWidget):
             "soniox_api_key": [("模型名稱：", self.soniox_model)],
         }
         notes = {
-            "soniox_api_key": "Soniox 的中文會自動轉成臺灣繁體與臺灣用語；產生會議紀錄前，再由 AI 做臺灣在地化校潤。",
+            "soniox_api_key": "Soniox 的中文會自動轉成臺灣繁體；有設定 Anthropic 金鑰時，"
+                              "轉錄完成後會立即由 AI 校潤成臺灣繁體中文與臺灣在地用語。",
+            "anthropic_api_key": "設定後，Soniox 轉錄完成時會立即由 AI 做臺灣繁體在地化"
+                                 "（2 小時會議約 US$1，依實際用量計費）。",
         }
         for name, label in app_config.SECRET_NAMES.items():
             box = QGroupBox(label)
@@ -206,9 +209,10 @@ class KeysPage(QWidget):
     def has_azure_location(self) -> bool:
         return bool(self.azure_region.currentText().strip() or self.azure_endpoint.text().strip())
 
-    def set_needed(self, needed: set[str]) -> None:
-        """設定目前選的引擎需要哪些金鑰，並更新狀態顏色。"""
+    def set_needed(self, needed: set[str], recommended: dict[str, str] | None = None) -> None:
+        """設定目前選的引擎需要（必要）與建議設定的金鑰（名稱 → 原因），並更新狀態顏色。"""
         self._needed = needed
+        self._recommended = recommended or {}
         self.refresh()
 
     def refresh(self) -> None:
@@ -219,6 +223,8 @@ class KeysPage(QWidget):
                 text, color = f"✔ 已設定（{app_config.mask_secret(value)}）", OK_COLOR
             elif name in self._needed:
                 text, color = "✘ 尚未設定（目前選擇的引擎需要這把金鑰）", ERROR_COLOR
+            elif name in getattr(self, "_recommended", {}):
+                text, color = f"建議設定（{self._recommended[name]}）", WARN_COLOR
             else:
                 text, color = "未設定（目前用不到）", "gray"
             row.status.setText(text)

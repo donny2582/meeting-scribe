@@ -86,10 +86,33 @@ def transcribe_audio(
         tmp.replace(flac)
     report(0, "準備語音轉文字")
     engine = create_engine(engine_name, cfg, ffmpeg)
-    phrases = stt_phrases(load_glossaries(glossaries), langs)
+    entries = load_glossaries(glossaries)
+    phrases = stt_phrases(entries, langs)
     report(0, f"{engine.display_name}：語言 {'、'.join(registry.languages[c].name for c in langs)}，"
               f"提示詞彙 {len(phrases)} 個")
-    return engine.transcribe(flac, registry.locales_for(langs), phrases, num_speakers, report, work_dir)
+    result = engine.transcribe(flac, registry.locales_for(langs), phrases, num_speakers, report, work_dir)
+    if result.needs_zh_tw_localization:
+        result = localize_if_possible(result, cfg, entries, report)
+    return result
+
+
+def localize_if_possible(result: SttResult, cfg: dict[str, Any], entries: list[Any],
+                         report: ProgressCallback) -> SttResult:
+    """有 Anthropic 金鑰時，立即由 AI 做臺灣繁體在地化；沒有金鑰或失敗時保留自動繁體轉換的結果。"""
+    from meeting_scribe.llm.base import LLMError
+
+    if not get_secret("anthropic_api_key"):
+        report(100, "未設定 Anthropic 金鑰：中文只做自動繁體轉換，未做 AI 臺灣在地化")
+        return result
+    from meeting_scribe.llm.anthropic_llm import AnthropicLLM
+    from meeting_scribe.postprocess.localize import localize_result
+
+    try:
+        return localize_result(result, AnthropicLLM(cfg), cfg, entries, report)
+    except LLMError as exc:
+        log.error("臺灣在地化失敗：%s", exc)
+        report(100, f"AI 臺灣在地化失敗（已保留自動繁體轉換的結果）：{exc}")
+        return result
 
 
 def load_or_transcribe(cache: Path, reuse: bool, progress: ProgressCallback | None = None,
@@ -113,8 +136,10 @@ def format_hms(sec: float) -> str:
 def write_transcript_txt(result: SttResult, path: Path) -> Path:
     """把辨識結果寫成易讀的逐字稿草稿（未經後處理）。"""
     lines = [f"辨識引擎：{result.engine_version}", f"錄音長度：{format_hms(result.audio_duration)}"]
-    if result.script_conversion:
-        lines.append("中文字形：已自動轉為臺灣繁體（產生會議紀錄前會再由 AI 做臺灣在地化校潤）")
+    if result.localized_by and not result.needs_zh_tw_localization:
+        lines.append(f"中文字形：已轉為臺灣繁體，並由 AI 完成臺灣在地化校潤（{result.localized_by}）")
+    elif result.script_conversion:
+        lines.append("中文字形：已自動轉為臺灣繁體；尚未完成 AI 臺灣在地化（需設定 Anthropic API 金鑰）")
     lines.append("")
     for s in result.segments:
         mark = "（疑似）" if s.speaker_uncertain else ""
