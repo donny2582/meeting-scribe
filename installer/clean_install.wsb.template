@@ -1,0 +1,16 @@
+<!-- 在「乾淨的 Windows」驗證安裝檔：Windows 沙箱每次開啟都是全新的系統，沒有 Python。
+     使用前：控制台 → 開啟或關閉 Windows 功能 → 勾選「Windows 沙箱」（需要系統管理員權限並重新開機）。
+     由 scripts\test_clean_install.ps1 產生實際路徑後開啟，不要直接雙擊本範本。 -->
+<Configuration>
+  <Networking>Disable</Networking>
+  <MappedFolders>
+    <MappedFolder>
+      <HostFolder>__DIST__</HostFolder>
+      <SandboxFolder>C:\MeetingScribe_dist</SandboxFolder>
+      <ReadOnly>false</ReadOnly>
+    </MappedFolder>
+  </MappedFolders>
+  <LogonCommand>
+    <Command>powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\MeetingScribe_dist\sandbox_install_test.ps1</Command>
+  </LogonCommand>
+</Configuration>

@@ -175,7 +175,21 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--out-dir", default="benchmark_out", help="輸出資料夾")
     s.add_argument("--reuse", action="store_true", help="沿用先前的轉錄結果，只重新計算指標")
     s.set_defaults(func=cmd_benchmark)
+
+    s = sub.add_parser("selftest", help="安裝後自我檢查：不需金鑰，在本機完成一次處理")
+    s.add_argument("--out", default=None, help="檢查結果與產出檔案的資料夾（預設：文件\\MeetingScribe\\自我檢查）")
+    s.set_defaults(func=cmd_selftest)
     return p
+
+
+def cmd_selftest(args: argparse.Namespace) -> int:
+    from meeting_scribe.config import APP_NAME, documents_dir
+    from meeting_scribe.selftest import run_selftest
+
+    out = Path(args.out) if args.out else documents_dir() / APP_NAME / "自我檢查"
+    failures = run_selftest(out)
+    print(f"報告：{out / 'selftest_report.txt'}")
+    return 1 if failures else 0
 
 
 def main(argv: list[str] | None = None) -> int:

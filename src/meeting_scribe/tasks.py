@@ -174,7 +174,7 @@ def localize_if_possible(result: SttResult, cfg: dict[str, Any], entries: list[A
 def clean_fillers(
     segments: list[Any], cfg: dict[str, Any], registry: LanguageRegistry,
     progress: ProgressCallback | None = None, cancel: CancelCheck | None = None,
-    checkpoint_file: Path | None = None,
+    checkpoint_file: Path | None = None, allow_ai: bool = True,
 ) -> tuple[list[Any], Any]:
     """產出文件前刪除贅字（SPEC 6.4）：規則層＋AI 層（有金鑰且未達費用上限時），只刪不改。
 
@@ -199,7 +199,9 @@ def clean_fillers(
 
     llm = None
     label, key_name = LLM_PROVIDERS[provider_of(cfg)]
-    if not get_secret(key_name):
+    if not allow_ai:
+        report_fn(0, "只用規則刪除贅字")
+    elif not get_secret(key_name):
         report_fn(0, f"未設定 {label} 金鑰：只用規則刪除贅字（呃、嗯、對對對…）")
     elif usage.budget_status(cfg).exceeded:
         report_fn(0, "本月費用已達上限：只用規則刪除贅字")

@@ -12,7 +12,7 @@
 | 2 | 摘要 | 🔧 程式完成（AI 依三種會議類型整理、依據驗證、分段合併、續跑），待以真實會議驗收 |
 | 3 | 輸出渲染 | 🔧 程式完成：會議紀錄 .docx（公文格式、Word 註解回溯、待查證黃色標示、待辦事項追蹤表）、逐字稿 .docx、心智圖 PNG 與 XMind；已用 Word 16 開啟驗證，XMind 尚待以 XMind 軟體開啟確認 |
 | 4 | GUI | 尚未開始 |
-| 5 | 打包 | 尚未開始 |
+| 5 | 打包 | 🔧 安裝檔完成，本機無 Python 環境驗證通過；Windows 沙箱乾淨環境驗證待執行 |
 
 ## 開發環境安裝
 
@@ -30,6 +30,25 @@
 ```powershell
 .\.venv\Scripts\python.exe -m pytest --cov=meeting_scribe
 ```
+
+## 打包與安裝檔
+
+需要 Inno Setup 6（`winget install JRSoftware.InnoSetup`）與 ffmpeg（`winget install Gyan.FFmpeg`）。
+
+```powershell
+.\scripts\build.ps1
+```
+
+依序：複製 ffmpeg.exe 到 `assets\ffmpeg\` → 產生圖示 → PyInstaller（onedir）打包到 `dist\MeetingScribe\` →
+用打包版執行**自我檢查** → Inno Setup 產生 `dist\installer\MeetingScribe_Setup_{版本}.exe`。
+
+- 安裝檔預設只裝給目前使用者（`%LOCALAPPDATA%\Programs\MeetingScribe`），**不需要系統管理員權限**，也不需要安裝 Python；
+  可勾選建立桌面捷徑。解除安裝時保留設定、金鑰與會議資料。
+- **自我檢查**（不需金鑰、不花費用，在本機完成一次處理：ffmpeg 轉檔、匯入逐字稿、刪除贅字、產出逐字稿 .docx、心智圖、開啟主視窗）：
+  `MeetingScribe.exe selftest --out 資料夾`，結果寫在該資料夾的 `selftest_report.txt`。
+- **乾淨 Windows 驗證**：啟用「Windows 沙箱」後執行 `.\scripts\test_clean_install.ps1`，
+  會在全新、沒有 Python 的 Windows 自動安裝並執行自我檢查，結果寫在 `dist\clean_install_result.txt`。
+- **程式圖示**：把正方形圖片（至少 256 × 256）存成 `assets\icon.png` 後重新打包；沒有這個檔案時使用內建的「紀」圖示。
 
 ## 第 0 階段：STT 引擎評估
 
