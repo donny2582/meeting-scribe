@@ -17,8 +17,13 @@
      （`tasks.localize_if_possible` → `postprocess/localize.py`），之後的詞庫校正、翻譯、贅字刪除都以此為準。
      沒有金鑰或 LLM 失敗時保留 OpenCC 結果，`needs_zh_tw_localization` 維持 True，第 1 階段後處理開始前要再補做。
   3. 是否啟用由設定 `[stt.soniox] convert_zh_tw`、`llm_localize_zh_tw` 控制（預設皆開啟）；
-     模型與推理強度在 `[llm.anthropic]`（預設 claude-opus-5-5、effort low）、`[llm.openai]`（預設 gpt-6.2-sol、
-     reasoning_effort low）；批次大小 `[llm] localize_batch_chars`。
+     各工作的模型與推理強度在 `[llm.<服務>.models]`、`[llm.anthropic.effort]`／`[llm.openai.reasoning_effort]`；
+     批次大小 `[llm] localize_batch_chars`。
+- **文字整理處理依工作選模型**（使用者指定的建議）：刪除贅字＝Haiku 5.5（OpenAI：gpt-6-luna）、
+  外語翻譯＝Sonnet 5.5、整理討論事項／結論／待辦＝Sonnet 5.5（重要會議可選 Opus 5.5）；臺灣在地化＝Opus 5.5。
+  呼叫 LLM 時一律指定 task（localize／filler／translate／summary）。模型選項與建議在 `assets/model_catalog.toml`。
+- **模型名稱一律用下拉選單＋右側「＋」新增**；「↻ 從服務更新模型清單」用官方「列出模型」API（不要抓網頁）。
+  新增的存 `[models.custom]`、查到的存 `[models.fetched]`。
 - **API 金鑰分頁只有兩個區塊**：「語音轉錄」（選服務，只顯示該服務的金鑰與區域／模型，與「轉錄」分頁的引擎同步）
   與「文字整理處理」（Anthropic／OpenAI）。不要再拆回每個服務一個區塊。
 

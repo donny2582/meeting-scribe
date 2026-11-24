@@ -13,6 +13,7 @@ from PySide6.QtCore import QObject, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QDesktopServices, QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QFileDialog,
     QHBoxLayout,
     QLabel,
@@ -20,6 +21,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -37,7 +39,8 @@ QPushButton#primary:hover { background: #1a5fd0; }
 QPushButton#primary:disabled { background: #9db7e0; }
 QGroupBox { font-weight: bold; margin-top: 10px; }
 QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 4px; }
-QGroupBox QLabel, QGroupBox QCheckBox, QGroupBox QLineEdit { font-weight: normal; }
+QGroupBox QLabel, QGroupBox QCheckBox, QGroupBox QLineEdit, QGroupBox QComboBox { font-weight: normal; }
+QToolButton { font-weight: bold; min-width: 26px; min-height: 22px; }
 """
 
 OK_COLOR = "#2e7d32"
@@ -154,6 +157,81 @@ class LanguagePicker(QWidget):
         for c, cb in self.boxes.items():
             if cb.isEnabled():
                 cb.setChecked(c in codes)
+
+
+class ModelPicker(QWidget):
+    """模型下拉選單＋右側「＋」按鈕（新增清單裡沒有的模型名稱）。
+
+    options：[(模型 ID, 顯示名稱, 說明)]；recommended 的選項會標示「★ 建議」。
+    """
+
+    added = Signal(str)
+    changed = Signal(str)
+
+    def __init__(self, options: list[tuple[str, str, str]], recommended: str | None = None,
+                 title: str = "新增模型") -> None:
+        super().__init__()
+        self.recommended = recommended
+        self.title = title
+        self.combo = QComboBox()
+        self.combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.combo.currentIndexChanged.connect(lambda _i: self.changed.emit(self.value()))
+        for model_id, label, note in options:
+            self._add_item(model_id, label, note)
+        self.plus = QToolButton()
+        self.plus.setText("＋")
+        self.plus.setToolTip("新增清單裡沒有的模型名稱（例如廠商推出的新版本）")
+        self.plus.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.plus.clicked.connect(self.ask_new)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(self.combo, 1)
+        lay.addWidget(self.plus)
+
+    def _add_item(self, model_id: str, label: str, note: str = "") -> None:
+        text = label if label == model_id else f"{label}（{model_id}）"
+        if note:
+            text += f"－{note}"
+        if model_id == self.recommended:
+            text += "　★ 建議"
+        self.combo.addItem(text, model_id)
+
+    def value(self) -> str:
+        return str(self.combo.currentData() or "")
+
+    def has(self, model_id: str) -> bool:
+        return self.combo.findData(model_id) >= 0
+
+    def add_option(self, model_id: str, note: str = "自行新增") -> None:
+        """加入一個選項（已存在則略過）。"""
+        if model_id and not self.has(model_id):
+            self._add_item(model_id, model_id, note)
+
+    def set_value(self, model_id: str) -> None:
+        """選取指定模型；清單中沒有時先加入。"""
+        if not model_id:
+            return
+        self.add_option(model_id, "設定檔中的模型")
+        self.combo.setCurrentIndex(self.combo.findData(model_id))
+
+    def ask_new(self) -> None:
+        """跳出輸入框新增模型名稱，加入後立即選取。"""
+        from PySide6.QtWidgets import QInputDialog
+
+        text, ok = QInputDialog.getText(self, self.title, "模型名稱（請照廠商文件上的 ID 輸入，例：claude-sonnet-5-5）：")
+        model_id = text.strip()
+        if not ok or not model_id:
+            return
+        if any(ch.isspace() for ch in model_id):
+            from PySide6.QtWidgets import QMessageBox
+
+            QMessageBox.warning(self, self.title, "模型名稱不能包含空白。")
+            return
+        is_new = not self.has(model_id)
+        self.add_option(model_id)
+        self.combo.setCurrentIndex(self.combo.findData(model_id))
+        if is_new:
+            self.added.emit(model_id)
 
 
 class TaskSignals(QObject):

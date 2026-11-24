@@ -1,6 +1,6 @@
 """OpenAI 實作（Chat Completions，REST）。
 
-- 模型名稱、推理強度由設定檔 ``[llm.openai]`` 指定，不寫死在程式中。
+- 各工作的模型與推理強度由設定檔 ``[llm.openai.models]``、``[llm.openai.reasoning_effort]`` 指定，不寫死在程式中。
 - 以結構化輸出（response_format = json_schema、strict）取得符合 schema 的 JSON。
 - 不送 temperature；輸出上限使用 max_completion_tokens（含推理 token）。
 """
@@ -25,23 +25,26 @@ class OpenAILLM(LLMClient):
     name = "openai"
 
     def __init__(self, cfg: dict[str, Any], api_key: str | None = None) -> None:
+        super().__init__()
         key = api_key or get_secret("openai_api_key")
         if not key:
             raise LLMError("尚未設定 OpenAI API 金鑰：請在「API 金鑰」分頁輸入", fatal=True)
         llm_cfg = cfg.get("llm", {})
         own = llm_cfg.get("openai", {})
         self.key = key
-        self.model = str(own.get("model", ""))
-        self.reasoning_effort = own.get("reasoning_effort") or None
+        self.models = {k: str(v) for k, v in (own.get("models") or {}).items()}
+        self.efforts = {k: str(v) for k, v in (own.get("reasoning_effort") or {}).items()}
         self.base_url = str(own.get("base_url", "https://api.openai.com/v1")).rstrip("/")
         self.timeout = float(llm_cfg.get("timeout_sec", 600))
         self.retries = int(llm_cfg.get("max_retries", 3))
 
-    def complete_json(self, system: str, user: str, schema: dict[str, Any], max_tokens: int = 16000) -> dict[str, Any]:
-        if not self.model:
-            raise LLMError("尚未設定 OpenAI 文字整理模型名稱", fatal=True)
+    def complete_json(self, system: str, user: str, schema: dict[str, Any], task: str,
+                      max_tokens: int = 16000) -> dict[str, Any]:
+        model = self.model_for(task)
+        if not model:
+            raise LLMError(f"尚未設定「{task}」使用的 OpenAI 模型", fatal=True)
         body: dict[str, Any] = {
-            "model": self.model,
+            "model": model,
             "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
             "response_format": {
                 "type": "json_schema",
@@ -49,8 +52,8 @@ class OpenAILLM(LLMClient):
             },
             "max_completion_tokens": max_tokens,
         }
-        if self.reasoning_effort:
-            body["reasoning_effort"] = self.reasoning_effort
+        if self.efforts.get(task):
+            body["reasoning_effort"] = self.efforts[task]
 
         from meeting_scribe.stt.base import SttError, request_with_retry
 
@@ -66,7 +69,7 @@ class OpenAILLM(LLMClient):
         if resp.status_code in (401, 403):
             raise LLMError("OpenAI API 金鑰無效或沒有權限", fatal=True)
         if resp.status_code == 404:
-            raise LLMError(f"找不到模型「{self.model}」，請確認「API 金鑰」分頁的模型名稱", fatal=True)
+            raise LLMError(f"找不到模型「{model}」，請確認「API 金鑰」分頁的模型選擇", fatal=True)
         if resp.status_code == 429:
             raise LLMError("OpenAI 請求過多或額度不足，請稍後再試", fatal=True)
         if resp.status_code >= 400:
@@ -86,6 +89,6 @@ class OpenAILLM(LLMClient):
         except json.JSONDecodeError as exc:
             raise LLMError("模型回傳的內容不是有效的 JSON") from exc
         usage = data.get("usage") or {}
-        log.info("OpenAI %s：輸入 %s、輸出 %s tokens", data.get("model", self.model),
+        log.info("OpenAI %s：輸入 %s、輸出 %s tokens", data.get("model", model),
                  usage.get("prompt_tokens", "?"), usage.get("completion_tokens", "?"))
         return result

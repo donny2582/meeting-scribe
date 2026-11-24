@@ -145,7 +145,7 @@ def localize_result(
         user = "請校潤以下片段：\n" + _to_json(batch)
         for attempt in (1, 2):
             try:
-                data = llm.complete_json(system, user, SCHEMA)
+                data = llm.complete_json(system, user, SCHEMA, task="localize")
                 updated.update(validate_batch(batch, data))
                 break
             except LLMError as exc:
@@ -165,7 +165,7 @@ def localize_result(
     return result.model_copy(update={
         "segments": segments,
         "needs_zh_tw_localization": failed > 0,
-        "localized_by": f"{llm.name} {llm.model}",
+        "localized_by": f"{llm.name} {llm.model_for('localize')}",
     })
 
 

@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFormLayout,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -28,13 +29,15 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from meeting_scribe import config as app_config
-from meeting_scribe.gui.widgets import ERROR_COLOR, OK_COLOR, WARN_COLOR, hint
+from meeting_scribe import models_catalog
+from meeting_scribe.gui.widgets import ERROR_COLOR, OK_COLOR, WARN_COLOR, ModelPicker, hint
 
 AZURE_REGIONS = ["eastasia", "southeastasia", "japaneast", "japanwest", "koreacentral",
                  "eastus", "westus2", "westeurope"]
@@ -96,6 +99,10 @@ def check_key(name: str, key: str, cfg: dict[str, Any]) -> tuple[bool, str]:
 
 class _TestSignals(QObject):
     done = Signal(object, bool, str)
+
+
+class _FetchSignals(QObject):
+    done = Signal(str, object, str)
 
 
 class KeyEditor(QWidget):
@@ -176,12 +183,22 @@ class KeysPage(QWidget):
         self.azure_region.lineEdit().setPlaceholderText("申請 Azure 語音服務時選的區域，例：eastasia")
         self.azure_endpoint = QLineEdit(stt.get("azure", {}).get("endpoint", ""))
         self.azure_endpoint.setPlaceholderText("通常留空")
-        self.openai_model = QLineEdit(stt.get("openai", {}).get("model", ""))
-        self.soniox_model = QLineEdit(stt.get("soniox", {}).get("model", ""))
+        self.custom: dict[str, list[str]] = {
+            k: list(v) for k, v in cfg.get("models", {}).get("custom", {}).items()
+        }
+        self.fetched: dict[str, list[dict[str, str]]] = {
+            k: list(v) for k, v in cfg.get("models", {}).get("fetched", {}).items()
+        }
+        self._fetch_signals = _FetchSignals()
+        self._fetch_signals.done.connect(self._on_fetch_done)
+        self._refresh_buttons: dict[str, QPushButton] = {}
+        self._pickers: dict[str, list[ModelPicker]] = {}
+        self.openai_model = self._picker("openai_stt", cfg, stt.get("openai", {}).get("model", ""))
+        self.soniox_model = self._picker("soniox", cfg, stt.get("soniox", {}).get("model", ""))
         stt_extras: dict[str, list[tuple[str, QWidget]]] = {
             "azure": [("區域：", self.azure_region), ("自訂端點：", self.azure_endpoint)],
-            "openai": [("語音轉錄模型：", self.openai_model)],
-            "soniox": [("模型名稱：", self.soniox_model)],
+            "openai": [("語音轉錄模型：", self.openai_model), ("", self._refresh_button("openai_stt"))],
+            "soniox": [("模型名稱：", self.soniox_model), ("", self._refresh_button("soniox"))],
         }
         stt_notes = {"soniox": "Soniox 的中文會先自動轉成繁體，再由下方「文字整理處理」的 AI 校潤成臺灣繁體中文與在地用語。"}
         for code, _label, key in STT_SERVICES:
@@ -192,8 +209,8 @@ class KeysPage(QWidget):
         # ---- 區塊 2：文字整理處理 ----
         box = QGroupBox("2. 文字整理處理")
         v = QVBoxLayout(box)
-        v.addWidget(hint("用 AI 把逐字稿校潤成臺灣繁體中文與在地用語（Soniox 轉錄完成時立即執行），"
-                         "之後也用來產生會議紀錄摘要。2 小時會議的在地化約 US$1，依實際用量計費。"))
+        v.addWidget(hint("用 AI 校潤、清理逐字稿並整理會議紀錄。不同工作可以用不同模型："
+                         "簡單、字量大的工作用便宜的模型，最需要理解力的整理結論用較好的模型。費用為每場（約 2 小時）的估計值。"))
         self.llm_combo = QComboBox()
         for code, label, _ in LLM_SERVICES:
             self.llm_combo.addItem(label, code)
@@ -201,17 +218,14 @@ class KeysPage(QWidget):
         form.addRow("服務：", self.llm_combo)
         v.addLayout(form)
         self.llm_stack = QStackedWidget()
-        self.anthropic_model = QLineEdit(llm.get("anthropic", {}).get("model", ""))
-        self.llm_openai_model = QLineEdit(llm.get("openai", {}).get("model", ""))
         self.shared_note = hint("與上方語音轉錄共用同一把 OpenAI 金鑰。")
-        llm_extras = {
-            "anthropic": [("模型名稱：", self.anthropic_model)],
-            "openai": [("文字整理模型：", self.llm_openai_model)],
-        }
+        #: (服務, 工作) → 模型下拉選單
+        self.task_models: dict[tuple[str, str], ModelPicker] = {}
         for code, _label, key in LLM_SERVICES:
-            page = self._service_page(key, llm_extras[code], None)
+            page = self._service_page(key, [], None)
             if code == "openai":
                 page.layout().addWidget(self.shared_note)
+            page.layout().addWidget(self._task_grid(code, cfg))
             self.llm_stack.addWidget(page)
         v.addWidget(self.llm_stack)
         lay.addWidget(box)
@@ -232,6 +246,103 @@ class KeysPage(QWidget):
         self.llm_combo.setCurrentIndex(max(idx, 0))
         self._on_llm_changed()
         self.refresh()
+
+    def _picker(self, kind: str, cfg: dict[str, Any], value: str, recommended: str | None = None) -> ModelPicker:
+        """建立模型下拉選單；同一類別的選單共用「＋」新增的模型。"""
+        opts = [(o.id, o.label, o.note) for o in models_catalog.options(kind, cfg)]
+        picker = ModelPicker(opts, recommended)
+        picker.set_value(value)
+        picker.added.connect(lambda model_id, k=kind: self._model_added(k, model_id))
+        self._pickers.setdefault(kind, []).append(picker)
+        return picker
+
+    def _model_added(self, kind: str, model_id: str) -> None:
+        """使用者按「＋」新增模型：記下來（儲存設定時寫入設定檔），並加到同類別的其他選單。"""
+        lst = self.custom.setdefault(kind, [])
+        if model_id not in lst:
+            lst.append(model_id)
+        for picker in self._pickers.get(kind, []):
+            picker.add_option(model_id)
+
+    def _refresh_button(self, kind: str) -> QPushButton:
+        """「↻ 更新模型清單」：用已儲存（或剛貼上）的金鑰向服務查詢目前可用的模型。"""
+        btn = QPushButton("↻ 從服務更新模型清單")
+        btn.setToolTip("用官方的「列出模型」API 取得目前可用的模型，加到下拉選單（需要先設定金鑰）")
+        btn.clicked.connect(lambda: self.refresh_models(kind))
+        btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self._refresh_buttons[kind] = btn
+        return btn
+
+    def refresh_models(self, kind: str) -> None:
+        """在背景查詢模型清單。"""
+        key_name = models_catalog.FETCHABLE[kind]
+        typed = next((e.edit.text().strip() for e in self.editors if e.name == key_name and e.edit.text().strip()),
+                     "")
+        key = typed or self._get(key_name)
+        if not key:
+            QMessageBox.information(self, "更新模型清單", f"請先設定「{app_config.SECRET_NAMES[key_name]}」。")
+            return
+        btn = self._refresh_buttons.get(kind)
+        if btn:
+            btn.setEnabled(False)
+            btn.setText("查詢中…")
+        cfg = self._cfg_provider()
+
+        def work() -> None:
+            try:
+                found = models_catalog.fetch_models(kind, key, cfg)
+            except models_catalog.FetchError as exc:
+                self._fetch_signals.done.emit(kind, None, str(exc))
+            else:
+                self._fetch_signals.done.emit(kind, found, "")
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_fetch_done(self, kind: str, found: list[models_catalog.ModelOption] | None, error: str) -> None:
+        btn = self._refresh_buttons.get(kind)
+        if btn:
+            btn.setEnabled(True)
+            btn.setText("↻ 從服務更新模型清單")
+        if found is None:
+            QMessageBox.warning(self, "更新模型清單", error)
+            return
+        added = 0
+        for opt in found:
+            if all(not p.has(opt.id) for p in self._pickers.get(kind, [])):
+                added += 1
+            for picker in self._pickers.get(kind, []):
+                picker.add_option(opt.id, opt.note)
+        self.fetched[kind] = [{"id": o.id, "label": o.label} for o in found]
+        msg = f"服務目前提供 {len(found)} 個模型，新增 {added} 個到下拉選單。" if found else "服務沒有回傳可用的模型。"
+        QMessageBox.information(self, "更新模型清單", msg + "\n按「儲存設定」後會記住這份清單。")
+
+    def _task_grid(self, provider: str, cfg: dict[str, Any]) -> QWidget:
+        """「每項工作用哪個模型」：工作名稱｜模型下拉選單＋「＋」，下方灰字為建議與每場費用。"""
+        box = QWidget()
+        grid = QGridLayout(box)
+        grid.setContentsMargins(0, 6, 0, 0)
+        grid.setColumnStretch(1, 1)
+        title = QLabel("各項工作使用的模型")
+        title.setStyleSheet("font-weight: bold;")
+        head = QHBoxLayout()
+        head.addWidget(title)
+        head.addStretch(1)
+        head.addWidget(self._refresh_button(provider))
+        grid.addLayout(head, 0, 0, 1, 2)
+        selected = cfg.get("llm", {}).get(provider, {}).get("models", {})
+        labels = {o.id: o.label for o in models_catalog.builtin_options(provider)}
+        row = 1
+        for task in models_catalog.tasks():
+            rec = task.recommend.get(provider)
+            picker = self._picker(provider, cfg, selected.get(task.code) or rec or "", rec)
+            self.task_models[(provider, task.code)] = picker
+            grid.addWidget(QLabel(f"{task.label}："), row, 0)
+            grid.addWidget(picker, row, 1)
+            rec_text = f"建議 {labels.get(rec, rec)}｜每場 US$ {task.cost}" if rec else f"每場 US$ {task.cost}"
+            note = hint(f"{rec_text}。{task.reason}")
+            grid.addWidget(note, row + 1, 1)
+            row += 2
+        return box
 
     def _service_page(self, key: str, extras: list[tuple[str, QWidget]], note: str | None) -> QWidget:
         page = QWidget()
@@ -389,12 +500,14 @@ class KeysPage(QWidget):
                 "default_engine": self.stt_provider(),
                 "azure": {"region": self.azure_region.currentText().strip(),
                           "endpoint": self.azure_endpoint.text().strip()},
-                "openai": {"model": self.openai_model.text().strip()},
-                "soniox": {"model": self.soniox_model.text().strip()},
+                "openai": {"model": self.openai_model.value()},
+                "soniox": {"model": self.soniox_model.value()},
             },
             "llm": {
                 "provider": self.llm_provider(),
-                "anthropic": {"model": self.anthropic_model.text().strip()},
-                "openai": {"model": self.llm_openai_model.text().strip()},
+                **{p: {"models": {t: pk.value() for (pp, t), pk in self.task_models.items() if pp == p}}
+                   for p, _l, _k in LLM_SERVICES},
             },
+            "models": {"custom": {k: list(v) for k, v in self.custom.items()},
+                       "fetched": {k: list(v) for k, v in self.fetched.items()}},
         }

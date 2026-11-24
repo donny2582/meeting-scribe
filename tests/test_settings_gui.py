@@ -68,7 +68,7 @@ def test_save_key_and_settings(app: QApplication, env: dict[str, Any]) -> None:
     win = _window(env)
     win.keys.editor_for("azure_speech_key").edit.setText("  az-new-key-1234  ")
     win.keys.azure_region.setCurrentText("eastasia")
-    win.keys.soniox_model.setText("stt-async-v7")
+    win.keys.soniox_model.set_value("stt-async-v7")
     win.transcribe.engine.setCurrentIndex(win.transcribe.engine.findData("soniox"))
     win.transcribe.languages.set_codes(["zh", "ja"])
     assert win.save_settings(quiet=True)

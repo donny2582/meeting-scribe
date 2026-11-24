@@ -43,10 +43,10 @@ def test_openai_request_shape(monkeypatch: pytest.MonkeyPatch, cfg: dict) -> Non
     post, calls = _reply({"items": [{"id": "S0000", "text": "好"}]})
     monkeypatch.setattr(httpx, "post", post)
     llm = OpenAILLM(cfg, api_key="sk-test")
-    assert llm.complete_json("sys", "user", {"type": "object"}) == {"items": [{"id": "S0000", "text": "好"}]}
+    assert llm.complete_json("sys", "user", {"type": "object"}, "localize") == {"items": [{"id": "S0000", "text": "好"}]}
     body = calls[0]["json"]
     assert calls[0]["url"].endswith("/chat/completions")
-    assert body["model"] == cfg["llm"]["openai"]["model"]
+    assert body["model"] == cfg["llm"]["openai"]["models"]["localize"]
     assert body["response_format"]["type"] == "json_schema"
     assert body["response_format"]["json_schema"]["strict"] is True
     assert body["reasoning_effort"] == "low"
@@ -68,7 +68,7 @@ def test_openai_errors(monkeypatch: pytest.MonkeyPatch, cfg: dict, kwargs: dict,
     post, _ = _reply(**kwargs)
     monkeypatch.setattr(httpx, "post", post)
     with pytest.raises(LLMError, match=match) as err:
-        OpenAILLM(cfg, api_key="sk-test").complete_json("s", "u", {})
+        OpenAILLM(cfg, api_key="sk-test").complete_json("s", "u", {}, "localize")
     assert err.value.fatal is fatal
 
 
@@ -96,5 +96,5 @@ def test_localize_uses_selected_provider(monkeypatch: pytest.MonkeyPatch, cfg: d
     out = tasks.localize_if_possible(result, cfg, [], lambda p, m: None)
     assert asked == ["openai_api_key"]
     assert out.segments[0].text == "這個專案"
-    assert out.localized_by == f"openai {cfg['llm']['openai']['model']}"
+    assert out.localized_by == f"openai {cfg['llm']['openai']['models']['localize']}"
     assert len(calls) == 1

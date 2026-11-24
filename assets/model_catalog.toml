@@ -1,0 +1,79 @@
+# 模型清單：下拉選單的選項與各工作的建議模型（2026-11）。
+# 模型改版時只要改這個檔案；使用者在介面按「＋」新增的模型存在使用者設定檔 [models.custom]。
+
+# ---- 文字整理處理（LLM） ----
+[[anthropic]]
+id = "claude-haiku-5-5"
+label = "Claude Haiku 5.5"
+note = "最便宜、最快"
+
+[[anthropic]]
+id = "claude-sonnet-5-5"
+label = "Claude Sonnet 5.5"
+note = "均衡"
+
+[[anthropic]]
+id = "claude-opus-5-5"
+label = "Claude Opus 5.5"
+note = "品質最好，費用約 Sonnet 的 2 倍"
+
+[[openai]]
+id = "gpt-6-luna"
+label = "GPT-6 Luna"
+note = "最便宜、最快"
+
+[[openai]]
+id = "gpt-6.1-terra"
+label = "GPT-6.1 Terra"
+note = "較便宜"
+
+[[openai]]
+id = "gpt-6.2-sol"
+label = "GPT-6.2 Sol"
+note = "均衡"
+
+[[openai]]
+id = "gpt-6.2-astra"
+label = "GPT-6.2 Astra"
+note = "品質最好，費用較高"
+
+# ---- 語音轉錄 ----
+[[openai_stt]]
+id = "gpt-4o-transcribe-diarize"
+label = "gpt-4o-transcribe-diarize"
+note = "具語者辨識"
+
+[[soniox]]
+id = "stt-async-v6"
+label = "stt-async-v6"
+note = "目前建議的非同步模型"
+
+# ---- 文字整理的工作與建議模型 ----
+# order 決定介面上的排列順序；recommend 為各服務的建議模型；cost 為每場（約 2 小時）的估計費用。
+[tasks.localize]
+order = 1
+label = "臺灣在地化"
+recommend = { anthropic = "claude-opus-5-5", openai = "gpt-6.2-sol" }
+reason = "把簡體或中國用語校潤成臺灣繁體與在地用語，只改字形與用語，需要分辨一字多義；Soniox 轉錄完成時立即執行。"
+cost = "約 1.00（改用 Sonnet 5.5 約 0.50）"
+
+[tasks.filler]
+order = 2
+label = "刪除贅字"
+recommend = { anthropic = "claude-haiku-5-5", openai = "gpt-6-luna" }
+reason = "工作單純（只刪不改），但字量最大，用最便宜的模型；子序列驗證會擋掉改錯的地方。"
+cost = "約 0.03"
+
+[tasks.translate]
+order = 3
+label = "外語翻譯"
+recommend = { anthropic = "claude-sonnet-5-5", openai = "gpt-6.2-sol" }
+reason = "日文敬語、韓文職稱、專業術語需要較好的理解力；外語片段通常不多，用好一點的模型也不貴。"
+cost = "約 0.01–0.05"
+
+[tasks.summary]
+order = 4
+label = "整理討論事項、結論、待辦"
+recommend = { anthropic = "claude-sonnet-5-5", openai = "gpt-6.2-sol" }
+reason = "要讀懂 2 小時的討論、套公文格式、每條附依據片段編號，最需要能力；重要會議可改用 Opus 5.5（品質更好，費用約 2 倍）。"
+cost = "約 0.30（Opus 5.5 約 0.60）"

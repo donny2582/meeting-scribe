@@ -1,6 +1,6 @@
 """Anthropic Claude 實作（官方 SDK）。
 
-- 模型名稱、effort 由設定檔 ``[llm.anthropic]`` 指定，不寫死在程式中。
+- 各工作的模型與 effort 由設定檔 ``[llm.anthropic.models]``、``[llm.anthropic.effort]`` 指定，不寫死在程式中。
 - 以結構化輸出（output_config.format = json_schema）取得保證可解析的 JSON。
 - 啟用伺服器端備援（server-side fallback）：主要模型拒絕回答時，API 會自動改用備援模型完成同一個請求。
 - 目前的模型不接受 temperature 等取樣參數，因此不送出。
@@ -28,13 +28,14 @@ class AnthropicLLM(LLMClient):
     name = "anthropic"
 
     def __init__(self, cfg: dict[str, Any], api_key: str | None = None) -> None:
+        super().__init__()
         key = api_key or get_secret("anthropic_api_key")
         if not key:
             raise LLMError("尚未設定 Anthropic API 金鑰：請在「API 金鑰」分頁輸入", fatal=True)
         llm_cfg = cfg.get("llm", {})
         own = llm_cfg.get("anthropic", {})
-        self.model = str(own.get("model", ""))
-        self.effort = own.get("effort") or None
+        self.models = {k: str(v) for k, v in (own.get("models") or {}).items()}
+        self.efforts = {k: str(v) for k, v in (own.get("effort") or {}).items()}
         self.use_fallbacks = bool(own.get("server_side_fallback", True))
         self.client = anthropic.Anthropic(
             api_key=key,
@@ -42,14 +43,16 @@ class AnthropicLLM(LLMClient):
             timeout=float(llm_cfg.get("timeout_sec", 600)),
         )
 
-    def complete_json(self, system: str, user: str, schema: dict[str, Any], max_tokens: int = 16000) -> dict[str, Any]:
-        if not self.model:
-            raise LLMError("尚未設定 Anthropic 模型名稱", fatal=True)
+    def complete_json(self, system: str, user: str, schema: dict[str, Any], task: str,
+                      max_tokens: int = 16000) -> dict[str, Any]:
+        model = self.model_for(task)
+        if not model:
+            raise LLMError(f"尚未設定「{task}」使用的 Anthropic 模型", fatal=True)
         output_config: dict[str, Any] = {"format": {"type": "json_schema", "schema": schema}}
-        if self.effort:
-            output_config["effort"] = self.effort
+        if self.efforts.get(task):
+            output_config["effort"] = self.efforts[task]
         kwargs: dict[str, Any] = {
-            "model": self.model,
+            "model": model,
             "max_tokens": max_tokens,
             "system": system,
             "messages": [{"role": "user", "content": user}],
@@ -65,7 +68,7 @@ class AnthropicLLM(LLMClient):
         except anthropic.PermissionDeniedError as exc:
             raise LLMError(f"Anthropic API 金鑰沒有權限：{exc.message}", fatal=True) from exc
         except anthropic.NotFoundError as exc:
-            raise LLMError(f"找不到模型「{self.model}」，請確認「API 金鑰」分頁的模型名稱", fatal=True) from exc
+            raise LLMError(f"找不到模型「{model}」，請確認「API 金鑰」分頁的模型選擇", fatal=True) from exc
         except anthropic.RateLimitError as exc:
             raise LLMError("Anthropic 請求過多或額度不足，請稍後再試", fatal=True) from exc
         except anthropic.BadRequestError as exc:

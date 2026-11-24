@@ -1,6 +1,7 @@
-"""LLM 介面（SPEC 7.5）：文字整理處理（臺灣在地化、之後的摘要）用的服務都實作同一個介面。
+"""LLM 介面（SPEC 7.5）：文字整理處理用的服務都實作同一個介面。
 
-模型名稱、推理強度由設定檔指定，不寫死在程式中。
+每項工作（臺灣在地化、刪除贅字、外語翻譯、整理討論事項／結論／待辦）可以用不同模型，
+模型名稱與推理強度由設定檔 ``[llm.<服務>.models]``、``[llm.<服務>.effort]`` 指定，不寫死在程式中。
 """
 
 from __future__ import annotations
@@ -24,8 +25,16 @@ class LLMClient(ABC):
     """LLM 用戶端介面。"""
 
     name: str = ""
-    model: str = ""
+
+    def __init__(self) -> None:
+        self.models: dict[str, str] = {}
+        self.efforts: dict[str, str] = {}
+
+    def model_for(self, task: str) -> str:
+        """某項工作使用的模型名稱。"""
+        return self.models.get(task, "")
 
     @abstractmethod
-    def complete_json(self, system: str, user: str, schema: dict[str, Any], max_tokens: int = 16000) -> dict[str, Any]:
-        """送出一次請求，回傳符合 schema 的 JSON 物件。"""
+    def complete_json(self, system: str, user: str, schema: dict[str, Any], task: str,
+                      max_tokens: int = 16000) -> dict[str, Any]:
+        """以 task 指定的模型送出一次請求，回傳符合 schema 的 JSON 物件。"""
