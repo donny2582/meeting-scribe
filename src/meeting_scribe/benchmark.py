@@ -13,6 +13,9 @@
   經字元規則判定）語言相同的比例。
 - 中文誤判率：標準答案標為中文的片段，被判定為外語的比例。
 - 處理時間、費用：換算為 2 小時錄音。
+
+沒有標準答案時（快速比較）：只計算處理時間、費用、講者數、詞庫詞彙出現次數與引擎之間的差異率，
+並產生逐段對照表（每 30 秒一列，各引擎的文字並排），供人工判斷哪個引擎比較準。
 """
 
 from __future__ import annotations
@@ -222,6 +225,9 @@ class EngineReport:
     lang_acc: tuple[int, int] = (0, 0)
     zh_misjudge: tuple[int, int] = (0, 0)
     n_speakers: int = 0
+    has_reference: bool = True
+    glossary_found: int = 0  # 詞庫詞彙在辨識結果中出現的次數（不需標準答案）
+    norm_text: str = ""  # 正規化後的辨識文字，用來計算引擎之間的差異（不寫入報告）
     notes: list[str] = field(default_factory=list)
 
     @property
@@ -233,16 +239,23 @@ class EngineReport:
         return self.price_per_hour * 2
 
 
+def glossary_found(hyp_text: str, terms: list[str]) -> int:
+    """詞庫詞彙在辨識結果中出現的次數（不需標準答案，次數越多通常代表專有名詞辨識越好）。"""
+    h = unicodedata.normalize("NFKC", hyp_text).lower().replace(" ", "")
+    return sum(h.count(t) for t in {unicodedata.normalize("NFKC", x).lower().replace(" ", "") for x in terms if x})
+
+
 def evaluate(
     result: SttResult,
-    ref: list[RefSegment],
+    ref: list[RefSegment] | None,
     registry: LanguageRegistry,
     terms: list[str],
     price_per_hour: float,
     lang_result: SttResult | None = None,
     lang_ref: list[RefSegment] | None = None,
 ) -> EngineReport:
-    """計算一個引擎的所有指標。"""
+    """計算一個引擎的所有指標；ref 為 None 時只算不需要標準答案的指標（快速比較）。"""
+    hyp_text = "".join(s.text for s in result.segments)
     rep = EngineReport(
         engine=result.engine,
         version=result.engine_version,
@@ -250,9 +263,16 @@ def evaluate(
         elapsed_sec=result.elapsed_sec,
         price_per_hour=price_per_hour,
         n_speakers=len({s.speaker for s in result.segments}),
+        has_reference=ref is not None,
+        glossary_found=glossary_found(hyp_text, terms),
+        norm_text=normalize_for_cer(hyp_text, registry),
     )
+    if any(s.speaker_uncertain for s in result.segments):
+        n = sum(1 for s in result.segments if s.speaker_uncertain)
+        rep.notes.append(f"切段串接時有 {n} 個片段的講者對應失敗（已標疑似）")
+    if ref is None:
+        return rep
     ref_text = "".join(r.text for r in ref)
-    hyp_text = "".join(s.text for s in result.segments)
     rep.cer = cer(ref_text, hyp_text, registry)
     rep.speaker_error = speaker_error_ratio(ref, result.segments)
     rep.glossary = glossary_hits(ref_text, hyp_text, terms)
@@ -263,10 +283,35 @@ def evaluate(
         acc = (acc[0] + acc2[0], acc[1] + acc2[1])
         zh = (zh[0] + zh2[0], zh[1] + zh2[1])
     rep.lang_acc, rep.zh_misjudge = acc, zh
-    if any(s.speaker_uncertain for s in result.segments):
-        n = sum(1 for s in result.segments if s.speaker_uncertain)
-        rep.notes.append(f"切段串接時有 {n} 個片段的講者對應失敗（已標疑似）")
     return rep
+
+
+def difference_rate(a: str, b: str) -> float | None:
+    """兩個引擎正規化文字的差異率（編輯距離 ÷ 較長者字數）。"""
+    longest = max(len(a), len(b))
+    return edit_distance(a, b) / longest if longest else None
+
+
+def write_side_by_side(results: list[SttResult], path: Path, window: float = 30.0) -> Path:
+    """逐段對照表 CSV（Excel 可開啟）：每 window 秒一列，各引擎在這段時間開始的發言並排。"""
+    end = max((s.end for r in results for s in r.segments), default=0.0)
+    rows = []
+    t = min((s.start for r in results for s in r.segments), default=0.0)
+    t = window * int(t // window)
+    while t < end:
+        cells = []
+        for r in results:
+            parts = [f"{s.speaker}：{s.text}" for s in r.segments if t <= s.start < t + window]
+            cells.append("\n".join(parts))
+        if any(cells):
+            rows.append([format_time(t), *cells])
+        t += window
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8-sig", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["時間", *[r.engine for r in results]])
+        w.writerows(rows)
+    return path
 
 
 def _pct(v: float | None) -> str:
@@ -281,14 +326,23 @@ def _mark(ok: bool | None) -> str:
     return "" if ok is None else (" ✔" if ok else " ✘")
 
 
-def render_report(reports: list[EngineReport], thresholds: dict, audio_name: str, lang_audio: str | None) -> str:
-    """產出 Markdown 比較表。"""
+def render_report(reports: list[EngineReport], thresholds: dict, audio_name: str, lang_audio: str | None,
+                  side_by_side: str | None = None) -> str:
+    """產出 Markdown 比較表。沒有標準答案時，正確率相關指標顯示「需要標準答案」。"""
     th = thresholds
-    lines = [
-        "# 第 0 階段 STT 引擎評估報告",
-        "",
+    has_ref = all(r.has_reference for r in reports)
+    need = "—（需要標準答案）"
+    lines = ["# 第 0 階段 STT 引擎評估報告", ""]
+    if not has_ref:
+        lines += [("> **快速比較（沒有標準答案）**：比較處理時間、費用、講者數、詞庫詞彙與引擎之間的差異。"
+                  "要計算字元錯誤率等正確率，請產生標準答案草稿並校正後再評估一次（可勾選「沿用先前的轉錄結果」，不會重複計費）。"), ""]
+    lines += [
         f"- 測試錄音：{audio_name}",
         f"- 語言測試錄音：{lang_audio or '（未提供）'}",
+    ]
+    if side_by_side:
+        lines.append(f"- 逐段對照表（各引擎文字並排，可用 Excel 開啟人工比對）：{side_by_side}")
+    lines += [
         "",
         "| 指標 | 門檻 | " + " | ".join(r.engine for r in reports) + " |",
         "|---|---|" + "---|" * len(reports),
@@ -297,30 +351,37 @@ def render_report(reports: list[EngineReport], thresholds: dict, audio_name: str
     def row(name: str, thr: str, cells: list[str]) -> None:
         lines.append(f"| {name} | {thr} | " + " | ".join(cells) + " |")
 
+    def ref_row(name: str, thr: str, make: object) -> None:
+        row(name, thr, [make(r) if r.has_reference else need for r in reports])  # type: ignore[operator]
+
     row("引擎版本", "", [r.version for r in reports])
-    row("字元錯誤率（CER）", f"≤ {th['cer_threshold'] * 100:.0f}%",
-        [_pct(r.cer) + _mark(r.cer <= th["cer_threshold"] if r.cer is not None else None) for r in reports])
-    row("講者錯誤比例", f"≤ {th['speaker_error_threshold'] * 100:.0f}%",
-        [_pct(r.speaker_error) + _mark(r.speaker_error <= th["speaker_error_threshold"]
-                                       if r.speaker_error is not None else None) for r in reports])
-    cells = []
-    for r in reports:
-        v = _ratio(r.glossary)
-        cells.append(f"{_pct(v)}（{r.glossary[0]}/{r.glossary[1]}）" +
-                     _mark(v >= th["glossary_hit_threshold"] if v is not None else None))
-    row("詞庫命中率", f"≥ {th['glossary_hit_threshold'] * 100:.0f}%", cells)
-    cells = []
-    for r in reports:
-        v = _ratio(r.lang_acc)
-        cells.append(f"{_pct(v)}（{r.lang_acc[0]}/{r.lang_acc[1]}）" +
-                     _mark(v >= th["lang_accuracy_threshold"] if v is not None else None))
-    row("語言判定正確率", f"≥ {th['lang_accuracy_threshold'] * 100:.0f}%", cells)
-    cells = []
-    for r in reports:
-        v = _ratio(r.zh_misjudge)
-        cells.append(f"{_pct(v)}（{r.zh_misjudge[0]}/{r.zh_misjudge[1]}）" +
-                     _mark(v <= th["zh_misjudge_threshold"] if v is not None else None))
-    row("中文誤判率", f"≤ {th['zh_misjudge_threshold'] * 100:.0f}%", cells)
+    ref_row("字元錯誤率（CER）", f"≤ {th['cer_threshold'] * 100:.0f}%",
+            lambda r: _pct(r.cer) + _mark(r.cer <= th["cer_threshold"] if r.cer is not None else None))
+    ref_row("講者錯誤比例", f"≤ {th['speaker_error_threshold'] * 100:.0f}%",
+            lambda r: _pct(r.speaker_error) + _mark(r.speaker_error <= th["speaker_error_threshold"]
+                                                    if r.speaker_error is not None else None))
+
+    def ratio_cell(pair: tuple[int, int], ok: object) -> str:
+        v = _ratio(pair)
+        return f"{_pct(v)}（{pair[0]}/{pair[1]}）" + _mark(ok(v) if v is not None else None)  # type: ignore[operator]
+
+    ref_row("詞庫命中率", f"≥ {th['glossary_hit_threshold'] * 100:.0f}%",
+            lambda r: ratio_cell(r.glossary, lambda v: v >= th["glossary_hit_threshold"]))
+    row("詞庫詞彙出現次數", "越多越好", [str(r.glossary_found) for r in reports])
+    ref_row("語言判定正確率", f"≥ {th['lang_accuracy_threshold'] * 100:.0f}%",
+            lambda r: ratio_cell(r.lang_acc, lambda v: v >= th["lang_accuracy_threshold"]))
+    ref_row("中文誤判率", f"≤ {th['zh_misjudge_threshold'] * 100:.0f}%",
+            lambda r: ratio_cell(r.zh_misjudge, lambda v: v <= th["zh_misjudge_threshold"]))
+    if len(reports) > 1:
+        cells = []
+        for r in reports:
+            parts = []
+            for o in reports:
+                if o is not r:
+                    d = difference_rate(r.norm_text, o.norm_text)
+                    parts.append(f"與 {o.engine} {_pct(d)}")
+            cells.append("；".join(parts))
+        row("引擎之間的文字差異率", "供參考", cells)
     row("處理時間（實測）", "", [f"{r.elapsed_sec / 60:.1f} 分鐘（錄音 {r.audio_duration / 60:.1f} 分鐘）"
                                 for r in reports])
     row("處理時間（換算 2 小時）", f"≤ {th['target_minutes_for_2h']} 分鐘",
@@ -331,8 +392,12 @@ def render_report(reports: list[EngineReport], thresholds: dict, audio_name: str
     row("偵測到的講者數", "", [str(r.n_speakers) for r in reports])
 
     lines += ["", "## 備註", ""]
-    lines.append("- CER 比較前，標準答案與辨識結果都先以規則刪除贅字並移除標點、空白。")
-    lines.append("- 講者錯誤比例只計算標準答案中「只有一人發言」的時間；引擎講者依重疊時間對應到標準答案講者。")
+    if has_ref:
+        lines.append("- CER 比較前，標準答案與辨識結果都先以規則刪除贅字並移除標點、空白。")
+        lines.append("- 講者錯誤比例只計算標準答案中「只有一人發言」的時間；引擎講者依重疊時間對應到標準答案講者。")
+    lines.append("- 詞庫詞彙出現次數：詞庫中的專有名詞在辨識結果中出現幾次；同一段錄音，次數多的引擎通常比較能辨識專有名詞。")
+    if len(reports) > 1:
+        lines.append("- 引擎之間的文字差異率：兩個引擎的結果（刪除贅字、標點後）有多少比例不同；差異大的地方請看逐段對照表，判斷哪個比較正確。")
     lines.append("- 處理時間依實測等比例換算，未計入網路上傳速度差異。")
     lines.append("- 費用依設定檔 price_per_hour 計算，請先依各供應商最新價目表填寫。")
     for r in reports:

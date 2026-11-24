@@ -117,7 +117,7 @@ def cmd_benchmark(args: argparse.Namespace) -> int:
     registry = LanguageRegistry.load()
     try:
         out = tasks.run_benchmark(
-            Path(args.audio), Path(args.reference), args.engines, _langs(args.languages, cfg, registry),
+            Path(args.audio), Path(args.reference) if args.reference else None, args.engines, _langs(args.languages, cfg, registry),
             _glossary_args(args), cfg, registry, Path(args.out_dir), args.reuse,
             Path(args.lang_audio) if args.lang_audio else None,
             Path(args.lang_reference) if args.lang_reference else None,
@@ -166,7 +166,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     s = sub.add_parser("benchmark", help="第 0 階段引擎評估")
     common(s)
-    s.add_argument("--reference", required=True, help="標準答案 CSV")
+    s.add_argument("--reference", help="標準答案 CSV（選填；沒有時只做快速比較，不計算正確率）")
     s.add_argument("--engines", nargs="+", choices=ENGINE_NAMES, default=["azure", "openai"])
     s.add_argument("--lang-audio", help="含日文或韓文發言的測試錄音（約 3 分鐘）")
     s.add_argument("--lang-reference", help="語言測試錄音的標準答案 CSV")

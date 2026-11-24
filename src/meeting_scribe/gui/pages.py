@@ -257,7 +257,10 @@ class TranscribePage(QWidget):
 
 
 class BenchmarkPage(QWidget):
-    """「引擎評估」分頁（第 0 階段）：準備測試錄音與標準答案（產生草稿、校正後存檔）→ 執行評估。"""
+    """「引擎評估」分頁（第 0 階段）：選測試錄音 →（選填）標準答案 → 執行評估。
+
+    沒有標準答案也能評估（快速比較）；有校正過的標準答案時才計算字元錯誤率等正確率。
+    """
 
     def __init__(self, host: Host, cfg: dict[str, Any], output_dir: Path) -> None:
         super().__init__()
@@ -269,7 +272,7 @@ class BenchmarkPage(QWidget):
         lay.addWidget(hint("用同一段真實會議錄音比較各引擎的辨識品質、講者辨識、詞庫命中率、語言判定、"
                            "處理時間與費用，依結果決定預設引擎（SPEC 5.3）。"))
 
-        box = QGroupBox("步驟 1：準備測試錄音與標準答案")
+        box = QGroupBox("步驟 1：測試錄音（標準答案選填）")
         step1 = QVBoxLayout(box)
         form = QFormLayout()
         step1.addLayout(form)
@@ -292,10 +295,12 @@ class BenchmarkPage(QWidget):
         form.addRow("測試錄音：", self.audio)
         form.addRow("日韓測試錄音：", self.lang_audio)
         form.addRow("評估資料夾：", self.out_dir)
-        form.addRow("草稿使用：", row)
-        form.addRow("標準答案：", self.ref_status)
-        step1.addWidget(hint("草稿由引擎自動產生、存在評估資料夾。請用 Excel 逐列校正 text（文字）、speaker（講者）、"
-                             "lang（zh／en／ja／ko）後直接存檔（保留 CSV 格式），步驟 2 會自動使用校正後的檔案。"))
+        form.addRow("標準答案（選填）：", row)
+        form.addRow("", self.ref_status)
+        step1.addWidget(hint("<b>不需要標準答案也可以直接按「開始評估」</b>：比較處理時間、費用、講者數、詞庫詞彙、"
+                             "引擎之間的差異，並產生逐段對照表（各引擎文字並排）讓您判斷哪個比較準。<br>"
+                             "要計算字元錯誤率等正確率時，才需要標準答案：按「產生標準答案草稿」，用 Excel 逐列校正 "
+                             "text（文字）、speaker（講者）、lang（zh／en／ja／ko）後直接存檔，評估時會自動使用。"))
         self.out_dir.changed.connect(lambda _t: self.refresh_status())
         self.lang_audio.changed.connect(lambda _t: self.refresh_status())
         lay.addWidget(box)
@@ -362,7 +367,7 @@ class BenchmarkPage(QWidget):
 
     def refresh_status(self) -> None:
         """顯示標準答案是否已產生、是否已校正。"""
-        texts = {"missing": ("尚未產生（請按「產生標準答案草稿」）", "gray"),
+        texts = {"missing": ("沒有（將做快速比較，不計算正確率）", "gray"),
                  "uncorrected": ("草稿尚未校正", WARN_COLOR),
                  "corrected": ("✔ 已校正", OK_COLOR)}
         lines = []
@@ -434,8 +439,6 @@ class BenchmarkPage(QWidget):
             problems.append("步驟 1 的測試錄音")
         if not out:
             problems.append("評估資料夾")
-        elif any(tasks.reference_status(p) == "missing" for p in refs):
-            problems.append("標準答案：請先按「產生標準答案草稿」並校正")
         if not engines:
             problems.append("至少一個比較引擎")
         if problems:
@@ -449,8 +452,8 @@ class BenchmarkPage(QWidget):
                 "用沒校正的草稿評估，產生草稿的引擎會顯得特別準，結果只能參考。仍要繼續嗎？")
             if answer != QMessageBox.StandardButton.Yes:
                 return
-        ref = refs[0]
-        lang_ref = refs[1] if len(refs) > 1 else None
+        ref: Path | None = refs[0] if refs and tasks.reference_status(refs[0]) != "missing" else None
+        lang_ref = refs[1] if len(refs) > 1 and tasks.reference_status(refs[1]) != "missing" else None
         reuse = self.reuse.isChecked()
         cfg = self.host.prepare_run([] if reuse else engines)
         if cfg is None:

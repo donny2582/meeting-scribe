@@ -4,6 +4,7 @@
 .DESCRIPTION
   1. 先用 -MakeReference 由引擎結果產生標準答案草稿，人工校正後存檔。
   2. 再以 -Reference 執行評估，產出 benchmark_out\benchmark_report.md。
+  沒有 -Reference 時做快速比較（處理時間、費用、講者數、詞庫詞彙、引擎之間的差異），不計算正確率。
 .EXAMPLE
   .\scripts\benchmark_stt.ps1 -Audio D:\錄音\測試10分鐘.m4a -MakeReference
 .EXAMPLE
@@ -38,11 +39,10 @@ if ($MakeReference) {
     exit $LASTEXITCODE
 }
 
-if (-not $Reference) { throw '請提供 -Reference（標準答案 CSV），或先用 -MakeReference 產生草稿。' }
-
-$argList = @('-m', 'meeting_scribe', 'benchmark', '--audio', $Audio, '--reference', $Reference,
-    '--engines') + $Engines + @('--languages') + $Languages + @('--out-dir', $OutDir)
-if ($LangAudio) { $argList += @('--lang-audio', $LangAudio, '--lang-reference', $LangReference) }
+$argList = @('-m', 'meeting_scribe', 'benchmark', '--audio', $Audio, '--engines') + $Engines + @('--languages') + $Languages + @('--out-dir', $OutDir)
+if ($Reference) { $argList += @('--reference', $Reference) }
+if ($LangAudio) { $argList += @('--lang-audio', $LangAudio) }
+if ($LangReference) { $argList += @('--lang-reference', $LangReference) }
 if ($Reuse) { $argList += '--reuse' }
 & $venvPy @argList
 exit $LASTEXITCODE

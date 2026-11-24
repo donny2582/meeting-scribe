@@ -85,7 +85,11 @@
 
 ### 引擎評估（命令列）
 
-圖形介面請用「引擎評估」分頁；命令列方式：先產生標準答案草稿，用 Excel 校正後另存為 `reference.csv`，再執行評估。
+圖形介面請用「引擎評估」分頁。命令列：不加 `-Reference` 是快速比較（不需標準答案）；要計算正確率時，先產生標準答案草稿，用 Excel 校正後另存為 `reference.csv` 再評估。
+
+```powershell
+.\scripts\benchmark_stt.ps1 -Audio "D:\錄音\測試10分鐘.m4a"
+```
 
 ```powershell
 .\scripts\benchmark_stt.ps1 -Audio "D:\錄音\測試10分鐘.m4a" -MakeReference
@@ -95,7 +99,7 @@
 .\scripts\benchmark_stt.ps1 -Audio "D:\錄音\測試10分鐘.m4a" -Reference .\benchmark_out\reference.csv
 ```
 
-報告存在 `benchmark_out\benchmark_report.md`，包含 SPEC 5.3 的全部指標（CER、講者錯誤比例、詞庫命中率、語言判定正確率、處理時間、費用）；
+報告存在 `benchmark_out\benchmark_report.md`，逐段對照表在 `engines_side_by_side.csv`；有標準答案時包含 SPEC 5.3 的全部指標（CER、講者錯誤比例、詞庫命中率、語言判定正確率、處理時間、費用）；
 加 `-Reuse` 只重算指標，不重新呼叫 API。
 
 ## 注意事項

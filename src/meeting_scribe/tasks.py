@@ -465,24 +465,33 @@ class BenchmarkOutput:
 
 
 def run_benchmark(
-    audio: Path, reference: Path, engines: list[str], langs: list[str], glossaries: list[Path],
+    audio: Path, reference: Path | None, engines: list[str], langs: list[str], glossaries: list[Path],
     cfg: dict[str, Any], registry: LanguageRegistry, out_dir: Path, reuse: bool = False,
     lang_audio: Path | None = None, lang_reference: Path | None = None, lang_langs: list[str] | None = None,
     progress: ProgressCallback | None = None, cancel: CancelCheck | None = None,
 ) -> BenchmarkOutput:
-    """第 0 階段引擎評估。單一引擎失敗時記錄錯誤並繼續評估其他引擎。"""
+    """第 0 階段引擎評估。單一引擎失敗時記錄錯誤並繼續評估其他引擎。
+
+    reference（標準答案）不存在或為 None 時做「快速比較」：不算正確率，只比較處理時間、費用、講者數、
+    詞庫詞彙與引擎之間的差異。一律產生逐段對照表 engines_side_by_side.csv 供人工比對。
+    """
     from meeting_scribe.audio.preprocess import AudioError
-    from meeting_scribe.benchmark import evaluate, load_reference, render_report
+    from meeting_scribe.benchmark import evaluate, load_reference, render_report, write_side_by_side
     from meeting_scribe.stt.base import SttError
 
-    if lang_audio and not lang_reference:
-        raise ValueError("提供日韓測試錄音時，也必須提供它的標準答案")
+    if reference is not None and not reference.is_file():
+        reference = None
+    if lang_reference is not None and not lang_reference.is_file():
+        lang_reference = None
     work = out_dir / "_work"
     work.mkdir(parents=True, exist_ok=True)
     terms = [e.term for e in load_glossaries(glossaries)]
-    ref = load_reference(reference)
-    lang_ref = load_reference(lang_reference) if lang_reference else None
+    ref = load_reference(reference) if reference else None
+    lang_ref = load_reference(lang_reference) if (lang_reference and ref is not None) else None
+    if progress and ref is None:
+        progress(0, "沒有標準答案：快速比較（處理時間、費用、講者數、詞庫詞彙、引擎之間的差異），不計算正確率")
     reports = []
+    results = []
     errors: dict[str, str] = {}
     for i, name in enumerate(engines):
         def sub(pct: float, msg: str, i: int = i, name: str = name) -> None:
@@ -503,11 +512,13 @@ def run_benchmark(
             log.error("引擎 %s 失敗：%s", name, exc)
             continue
         price = float(cfg.get("stt", {}).get(name, {}).get("price_per_hour", 0.0) or 0.0)
+        results.append(result)
         reports.append(evaluate(result, ref, registry, terms, price, lang_result, lang_ref))
 
     if not reports:
         return BenchmarkOutput(None, "", errors)
-    md = render_report(reports, cfg["benchmark"], audio.name, lang_audio.name if lang_audio else None)
+    side = write_side_by_side(results, out_dir / "engines_side_by_side.csv")
+    md = render_report(reports, cfg["benchmark"], audio.name, lang_audio.name if lang_audio else None, side.name)
     unchecked = [p.name for p in (reference, lang_reference) if p and reference_status(p) == "uncorrected"]
     if unchecked:
         md = (f"> ⚠ 標準答案（{'、'.join(unchecked)}）尚未校正，仍是引擎自動產生的草稿；"

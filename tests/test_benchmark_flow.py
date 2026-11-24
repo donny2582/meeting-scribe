@@ -1,4 +1,4 @@
-"""引擎評估：不必另外選擇標準答案，自動使用校正後的草稿。"""
+"""引擎評估：標準答案選填（沒有時快速比較），有校正後的草稿時自動使用。"""
 
 import os
 from pathlib import Path
@@ -21,7 +21,7 @@ from meeting_scribe.postprocess.lang_detect import LanguageRegistry
 
 def _fake_transcribe(monkeypatch: pytest.MonkeyPatch, text: str = "我們開始開會") -> None:
     def fake(cache: Path, reuse: bool, progress: Any = None, **kwargs: Any) -> SttResult:
-        return SttResult(engine="soniox", engine_version="v", audio_duration=10, elapsed_sec=1, locales=["zh-TW"],
+        return SttResult(engine=kwargs.get("engine_name", "soniox"), engine_version="v", audio_duration=10, elapsed_sec=1, locales=["zh-TW"],
                          segments=[RawSegment(start=0, end=2, speaker="講者1", text=text)])
 
     monkeypatch.setattr(tasks, "load_or_transcribe", fake)
@@ -105,11 +105,32 @@ def page(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
     del app
 
 
-def test_no_step_to_choose_reference(page: Any) -> None:
+def test_evaluate_without_reference(page: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    """沒有標準答案也能直接開始評估（快速比較），不會被擋下。"""
     assert not hasattr(page, "reference") and not hasattr(page, "lang_reference")
-    assert "尚未產生" in page.ref_status.text() and not page.open_drafts.isEnabled()
+    assert "快速比較" in page.ref_status.text() and not page.open_drafts.isEnabled()
+    calls: list[Any] = []
+    monkeypatch.setattr(tasks, "run_benchmark", lambda audio, ref, *a, **k: calls.append(ref)
+                        or tasks.BenchmarkOutput(None, "", {}))
     page.start()
-    assert any("產生標準答案草稿" in a for a in page.asked)
+    for _ in range(100):
+        QCoreApplication.processEvents()
+        if not page.panel.running:
+            break
+        QTest.qWait(10)
+    assert calls == [None] and not any("請先完成" in a for a in page.asked)
+
+
+def test_quick_compare_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    _fake_transcribe(monkeypatch)
+    out = tasks.run_benchmark(tmp_path / "a.m4a", None, ["soniox", "azure"], ["zh"], [], load_config(),
+                              LanguageRegistry.load(), tmp_path / "eval")
+    md = out.markdown
+    assert "快速比較（沒有標準答案）" in md and "需要標準答案" in md
+    assert "引擎之間的文字差異率" in md and "詞庫詞彙出現次數" in md
+    side = tmp_path / "eval" / "engines_side_by_side.csv"
+    rows = side.read_text(encoding="utf-8-sig").splitlines()
+    assert rows[0] == "時間,soniox,azure"
 
 
 def test_start_uses_reference_automatically(page: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
