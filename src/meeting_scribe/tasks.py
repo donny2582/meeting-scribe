@@ -366,11 +366,16 @@ def run_transcribe_job(
     progress: ProgressCallback | None = None, cancel: CancelCheck | None = None,
     clip: tuple[float, float] | None = None,
 ) -> TranscribeOutput:
-    """轉錄並輸出到「輸出資料夾\\{日期時間}_{檔名}_{引擎}」。"""
+    """轉錄，結果存在工作資料夾 ``%LOCALAPPDATA%\\MeetingScribe\\jobs\\{日期時間}_{檔名}``（程式用的檔案）。
+
+    使用者看的檔案（逐字稿、會議紀錄、心智圖）在「產出文件」時才寫到
+    ``輸出資料夾\\{民國日期}_{會議名稱}\\``（見 meeting_folder）。out_root 保留給相容用途。
+    """
     from meeting_scribe import checkpoint
+    from meeting_scribe.config import jobs_dir
 
     checkpoint.purge_old()
-    folder = out_root / f"{datetime.now():%Y%m%d_%H%M}_{audio.stem}_{engine_name}"
+    folder = jobs_dir() / f"{datetime.now():%Y%m%d_%H%M}_{audio.stem}"
     result = transcribe_audio(engine_name, audio, langs, glossaries, cfg, registry, folder / "_work",
                               num_speakers, progress, cancel, clip=clip)
     folder.mkdir(parents=True, exist_ok=True)
@@ -379,6 +384,17 @@ def run_transcribe_job(
     txt_path = write_transcript_txt(result, folder / "逐字稿草稿.txt")
     log.info("轉錄完成：%d 個片段，%.1f 分鐘", len(result.segments), result.elapsed_sec / 60)
     return TranscribeOutput(folder, json_path, txt_path, result)
+
+
+def meeting_folder(out_root: Path, info: Any) -> Path:
+    """每場會議一個輸出資料夾：``輸出資料夾\\{民國年月日}_{會議名稱第一行}``，只放產出的檔案。"""
+    import re
+
+    from meeting_scribe.render.roc_date import format_roc_ymd
+
+    first = next((ln.strip() for ln in (info.title or "").splitlines() if ln.strip()), "") or "未命名會議"
+    name = re.sub(r'[\\/:*?"<>|\t]', "", first)[:40].strip(" .")
+    return out_root / f"{format_roc_ymd(date.fromisoformat(info.date))}_{name}"
 
 
 #: 引擎評估資料夾中的標準答案檔名（步驟 1 產生草稿，校正後直接存回原檔，評估時自動使用）

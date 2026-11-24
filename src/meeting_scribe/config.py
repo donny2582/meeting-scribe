@@ -86,6 +86,11 @@ def default_glossary_names() -> set[str]:
     return {p.stem.removeprefix("seed_") for p in (assets_dir() / "glossary").glob("seed_*.csv")}
 
 
+def jobs_dir() -> Path:
+    """工作資料夾（SPEC 11）：``%LOCALAPPDATA%\\MeetingScribe\\jobs``。放程式用的檔案，不放在「文件」裡。"""
+    return localappdata_dir() / "jobs"
+
+
 def user_glossary_dir() -> Path:
     """使用者詞庫資料夾 ``%APPDATA%\\MeetingScribe\\glossary``。
 

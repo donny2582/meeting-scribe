@@ -173,8 +173,8 @@ class TranscribePage(QWidget):
         self.output.set_path(output_dir)
         form.addRow("輸出資料夾：", self.output)
         v.addLayout(form)
-        v.addWidget(hint("每次轉錄會在這裡建立一個「日期時間_檔名_引擎」資料夾，"
-                         "內含逐字稿草稿（.txt）與引擎原始結果（stt_raw.json）。"))
+        v.addWidget(hint("產出的逐字稿、會議紀錄、心智圖會存在這裡，每場會議一個資料夾（例：1151110_道安研商會議）。"
+                         "程式用的工作檔放在 %LOCALAPPDATA%\\MeetingScribe\\jobs，不會放在這裡。"))
         lay.addWidget(box)
 
         run_row = QHBoxLayout()
@@ -183,7 +183,7 @@ class TranscribePage(QWidget):
         for b in (self.open_txt, self.open_folder):
             b.setEnabled(False)
         self.open_txt.clicked.connect(lambda: self.last_output and open_path(self.last_output.txt_path))
-        self.open_folder.clicked.connect(lambda: self.last_output and open_path(self.last_output.folder))
+        self.open_folder.clicked.connect(self._open_output_root)
         self.run_button = primary_button("開始轉錄")
         self.run_button.clicked.connect(self.start)
         run_row.addWidget(self.open_txt)
@@ -197,6 +197,12 @@ class TranscribePage(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(_scroll(body))
+
+    def _open_output_root(self) -> None:
+        root = self.output.path()
+        if root:
+            root.mkdir(parents=True, exist_ok=True)
+            open_path(root)
 
     def _update_audio_info(self, _text: str) -> None:
         path = self.audio.path()

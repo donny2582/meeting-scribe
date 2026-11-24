@@ -41,6 +41,8 @@
   介面風格參考 github.com/donny2582/live-subtitle 的設定視窗。第 4 階段在此基礎上加入新工作、進度、審閱分頁。
 - 使用者要求新增「產出文件」分頁（轉錄完成自動跳轉；也可匯入既有逐字稿 txt／srt／docx／json）：
   修正逐字稿、會議資訊表頭（SPEC 4.1）、產出項目；文件存成工作資料夾的 document.json。
+- **檔案位置**：輸出資料夾只放成品，每場會議一個 `{民國年月日}_{會議名稱第一行}` 資料夾（tasks.meeting_folder）；
+  程式工作檔（document.json、stt_raw.json、逐字稿草稿.txt、_work、summary json）一律放 `config.jobs_dir()`。
   已提前實作逐字稿 .docx（render/docx_transcript.py、render/roc_date.py）；會議紀錄與心智圖仍待第 2、3 階段，
   完成後接到本分頁的「產出文件」按鈕。
 - 測試一律透過 tests/conftest.py 隔離 APPDATA 與金鑰，不得讀寫使用者真正的設定檔。

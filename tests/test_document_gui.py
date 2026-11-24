@@ -107,7 +107,8 @@ def test_edit_rename_merge_and_produce(win: Any, tmp_path: Path, monkeypatch: py
         assert expected in log, expected
     assert page.panel.status.text() == "完成" and page.panel.elapsed.text().startswith("已經過")
     assert page.produce_button.isEnabled()
-    assert page.last_output.parent == tmp_path / "job" / "輸出"
+    assert page.last_output.parent.parent == tmp_path / "documents" / "MeetingScribe" / "輸出"
+    assert page.last_output.parent.name.endswith("_道安業務研商會議")
     texts = [p.text for p in docx.Document(str(page.last_output)).paragraphs]
     assert "請公路局說明本案進度。" in texts
     assert any(t.startswith("[00:00:00] 公路局：") for t in texts)

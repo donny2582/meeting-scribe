@@ -37,7 +37,7 @@ from meeting_scribe.gui.settings import KeysPage
 from meeting_scribe.gui.widgets import APP_STYLE, open_path, primary_button
 from meeting_scribe.postprocess.lang_detect import LanguageRegistry
 
-STAGE_TEXT = "目前進度：第 0 階段（引擎評估）"
+STAGE_TEXT = "Author: Xiang-Yun"
 SAVE_DETAIL = (
     "儲存的內容：\n"
     "・金鑰：輸入後還沒按「儲存」的 API 金鑰（存在 Windows 認證管理員）\n"

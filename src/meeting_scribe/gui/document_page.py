@@ -41,7 +41,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from meeting_scribe.config import output_dir
+from meeting_scribe.config import jobs_dir, output_dir
 from meeting_scribe.gui.widgets import OK_COLOR, WARN_COLOR, RunPanel, hint, open_path, primary_button
 from meeting_scribe.render.roc_date import format_roc_date, format_roc_time, parse_hhmm, round_to_minutes
 from meeting_scribe.transcript_io import (
@@ -255,7 +255,7 @@ class DocumentPage(QWidget):
         self.save_button = QPushButton("儲存修改")
         self.save_button.setToolTip("把修正的文字與會議資訊存起來（document.json），之後可以「開啟已存的文件」繼續")
         self.save_button.clicked.connect(lambda: self.save(quiet=False))
-        self.open_folder = QPushButton("開啟輸出資料夾")
+        self.open_folder = QPushButton("開啟這場會議的資料夾")
         self.open_folder.clicked.connect(self._open_folder)
         self.open_file = QPushButton("開啟逐字稿")
         self.open_file.clicked.connect(lambda: self.last_output and open_path(self.last_output))
@@ -302,6 +302,7 @@ class DocumentPage(QWidget):
         self.type_group.buttonToggled.connect(lambda *_: self._update_labels())
         for w in (self.title, self.agenda):
             w.textChanged.connect(self._mark_dirty)
+        self.title.textChanged.connect(self._update_labels)  # 輸出資料夾名稱跟著會議名稱變
         for w in (self.recorder, self.attendees):
             w.textChanged.connect(self._mark_dirty)
         for w in (self.location, self.chair):
@@ -351,6 +352,15 @@ class DocumentPage(QWidget):
         self.end_label.setText(f"散會({format_roc_time(self.end.time().toPython())})")
         code = self.meeting_type()
         self.type_hint.setText(TYPE_HINTS.get(code, ""))
+        if self.doc is not None:
+            self.folder_label.setText(f"產出的檔案會存在：{self.output_folder()}")
+
+    def output_folder(self) -> Path:
+        """這場會議的輸出資料夾：輸出資料夾\\{民國年月日}_{會議名稱}（依目前畫面上的名稱與日期）。"""
+        from meeting_scribe import tasks
+
+        info = MeetingInfo(title=self.title.toPlainText(), date=self.date.date().toPython().isoformat())
+        return tasks.meeting_folder(output_dir(self.host.cfg), info)
 
     def meeting_type(self) -> str:
         return next((c for c, rb in self.type_buttons.items() if rb.isChecked()), "topic")
@@ -402,7 +412,6 @@ class DocumentPage(QWidget):
         extra = f"｜錄音 {_hms(doc.audio_duration)}" if doc.audio_duration and doc.has_timecodes else ""
         no_time = "｜沒有時間碼" if not doc.has_timecodes else ""
         self.source_label.setText(f"<b>來源：</b>{doc.source}{extra}{no_time}")
-        self.folder_label.setText(f"輸出位置：{Path(doc.folder) / '輸出'}")
         self.result_label.setText("")
         self._set_enabled(True)
         self.panel.append(f"載入逐字稿：{doc.source}，{len(doc.segments)} 段、{len(doc.speakers())} 位講者")
@@ -444,7 +453,7 @@ class DocumentPage(QWidget):
         if not chosen:
             return
         path = Path(chosen)
-        folder = output_dir(self.host.cfg) / f"{datetime.now():%Y%m%d_%H%M}_{path.stem}_匯入"
+        folder = jobs_dir() / f"{datetime.now():%Y%m%d_%H%M}_{path.stem}_匯入"
         try:
             doc = import_transcript(path, folder)
         except ImportError_ as exc:
@@ -458,7 +467,7 @@ class DocumentPage(QWidget):
         """開啟之前存的 document.json。"""
         if not self._confirm_discard():
             return
-        start = str(output_dir(self.host.cfg))
+        start = str(jobs_dir())
         chosen, _ = QFileDialog.getOpenFileName(self, "開啟已存的文件", start, f"文件 ({DOCUMENT_FILE})")
         if not chosen:
             return
@@ -597,7 +606,7 @@ class DocumentPage(QWidget):
         if not self.save(quiet=True):
             return
         doc = self.doc.model_copy(deep=True)  # 背景產出時使用當下的內容，不受之後的編輯影響
-        out_dir = Path(doc.folder) / "輸出"
+        out_dir = self.output_folder()
         want_transcript = self.want_transcript.isChecked()
         want_ai = any(cb.isChecked() for cb in (self.want_discussion, self.want_conclusion,
                                                 self.want_action_table, self.want_mindmap))
@@ -693,7 +702,7 @@ class DocumentPage(QWidget):
     def _open_folder(self) -> None:
         if self.doc is None:
             return
-        folder = Path(self.doc.folder) / "輸出"
+        folder = self.output_folder()
         folder.mkdir(parents=True, exist_ok=True)
         open_path(folder)
 
