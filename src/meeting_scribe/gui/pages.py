@@ -68,6 +68,9 @@ class Host(Protocol):
     def engines_changed(self) -> None:
         """使用者換了引擎選擇，需要更新金鑰提示。"""
 
+    def open_transcription(self, out: tasks.TranscribeOutput, audio: Path | None) -> None:
+        """轉錄完成：把結果帶到「產出文件」分頁並切換過去。"""
+
 
 def _scroll(widget: QWidget) -> QScrollArea:
     area = QScrollArea()
@@ -216,6 +219,7 @@ class TranscribePage(QWidget):
             return tasks.run_transcribe_job(engine, audio, langs, glossaries, cfg, registry, out_root,
                                             speakers, progress, cancel)
 
+        self._current_audio = audio
         self.panel.start(f"轉錄 {audio.name}", work, self._done)
 
     def _done(self, out: tasks.TranscribeOutput) -> None:
@@ -225,6 +229,7 @@ class TranscribePage(QWidget):
         r = out.result
         self.panel.append(f"共 {len(r.segments)} 個片段、{len({s.speaker for s in r.segments})} 位講者，"
                           f"處理 {r.elapsed_sec / 60:.1f} 分鐘。輸出：{out.folder}")
+        self.host.open_transcription(out, getattr(self, "_current_audio", None))  # 切到「產出文件」
 
 
 class BenchmarkPage(QWidget):

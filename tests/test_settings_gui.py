@@ -119,7 +119,7 @@ def test_two_sections_and_sync(app: QApplication, env: dict[str, Any]) -> None:
 def test_no_services_tab(app: QApplication, env: dict[str, Any]) -> None:
     win = _window(env)
     labels = [win.tabs.tabText(i) for i in range(win.tabs.count())]
-    assert labels == ["轉錄", "引擎評估", "詞庫", "API 金鑰"]
+    assert labels == ["轉錄", "產出文件", "引擎評估", "詞庫", "API 金鑰"]
     win.close()
 
 

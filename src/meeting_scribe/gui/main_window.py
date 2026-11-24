@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from PySide6.QtGui import QCloseEvent, QFont, QKeySequence, QShortcut
@@ -29,6 +30,7 @@ from PySide6.QtWidgets import (
 
 from meeting_scribe import config as app_config
 from meeting_scribe import tasks
+from meeting_scribe.gui.document_page import DocumentPage
 from meeting_scribe.gui.icon import make_pixmap
 from meeting_scribe.gui.pages import BenchmarkPage, GlossaryPage, TranscribePage
 from meeting_scribe.gui.settings import KeysPage
@@ -63,6 +65,7 @@ class MainWindow(QMainWindow):
         out = app_config.output_dir(self.cfg)
         self.transcribe = TranscribePage(self, self.cfg, out)
         self.benchmark = BenchmarkPage(self, self.cfg, out)
+        self.document = DocumentPage(self)
         self.glossary = GlossaryPage(on_changed=self._glossaries_changed)
         self.keys = KeysPage(lambda: self.cfg, **(secret_store or {}))
         self.keys.keys_changed.connect(self.engines_changed)
@@ -72,14 +75,16 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self._pages = {
             "transcribe": (self.transcribe, "轉錄"),
+            "document": (self.document, "產出文件"),
             "benchmark": (self.benchmark, "引擎評估"),
             "glossary": (self.glossary, "詞庫"),
             "keys": (self.keys, "API 金鑰"),
         }
         for page, label in self._pages.values():
             self.tabs.addTab(page, label)
-        self.tabs.setTabToolTip(0, "把錄音檔轉成逐字稿草稿")
-        self.tabs.setTabToolTip(1, "第 0 階段：比較語音轉文字引擎，決定預設引擎")
+        self.tabs.setTabToolTip(0, "把錄音檔轉成逐字稿")
+        self.tabs.setTabToolTip(1, "修正逐字稿、填寫會議資訊、產出文件（也可以匯入已經有的逐字稿）")
+        self.tabs.setTabToolTip(2, "第 0 階段：比較語音轉文字引擎，決定預設引擎")
 
         bottom = QHBoxLayout()
         tools = [
@@ -131,6 +136,35 @@ class MainWindow(QMainWindow):
         if engine == "soniox":
             recommended[LLM_PROVIDERS[self.keys.llm_provider()][1]] = "Soniox 的 AI 臺灣在地化會用到"
         self.keys.set_needed({app_config.ENGINE_KEYS[engine]}, recommended)
+
+    def open_transcription(self, out: tasks.TranscribeOutput, audio: Path | None) -> None:
+        """轉錄完成：把結果帶到「產出文件」分頁並切換過去。"""
+        from meeting_scribe.transcript_io import from_stt_result
+
+        if self.document.dirty and not self.document._confirm_discard():
+            self.statusBar().showMessage("轉錄已完成；可在「產出文件」分頁用「匯入逐字稿檔案…」開啟 stt_raw.json", 10000)
+            return
+        self.document.load(from_stt_result(out.result, out.folder, audio))
+        self.go_to("document")
+        self.statusBar().showMessage("轉錄完成：請修正逐字稿、填寫會議資訊後產出文件。", 10000)
+
+    def remember_meeting_fields(self, location: str, chair: str, recorder: str) -> None:
+        """記住最近 10 個會議地點、主席，以及上次的紀錄人員。"""
+        ui = self.cfg.get("ui", {})
+
+        def push(items: list[str], value: str) -> list[str]:
+            return ([value] if value else []) + [i for i in items if i and i != value][:9]
+
+        updates = {"ui": {
+            "recent_locations": push(list(ui.get("recent_locations", [])), location),
+            "recent_chairs": push(list(ui.get("recent_chairs", [])), chair),
+            "last_recorder": recorder or ui.get("last_recorder", ""),
+        }}
+        try:
+            app_config.save_user_overrides(updates)
+            self.cfg = app_config.load_config()
+        except OSError:
+            pass
 
     def _stt_from_keys(self, code: str) -> None:
         """在「API 金鑰」換語音轉錄服務時，同步「轉錄」分頁的引擎。"""
@@ -259,6 +293,9 @@ class MainWindow(QMainWindow):
                 return
             if answer == QMessageBox.StandardButton.Save:
                 self.keys.save_pending()
+        if not self.document._confirm_discard():  # 逐字稿有未儲存的修改
+            event.ignore()
+            return
         try:
             app_config.save_user_overrides(self._settings_updates())  # 記住這次的選擇
         except Exception:  # noqa: BLE001, S110 - 關閉時無法存檔不影響結束

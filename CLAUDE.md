@@ -33,3 +33,8 @@
   使用者不要重複的設定頁：引擎、語言、輸出資料夾只在「轉錄」分頁選並記住上次選擇；
   Azure 區域與模型名稱放在「API 金鑰」分頁對應服務的區塊；單價只在設定檔。
   介面風格參考 github.com/donny2582/live-subtitle 的設定視窗。第 4 階段在此基礎上加入新工作、進度、審閱分頁。
+- 使用者要求新增「產出文件」分頁（轉錄完成自動跳轉；也可匯入既有逐字稿 txt／srt／docx／json）：
+  修正逐字稿、會議資訊表頭（SPEC 4.1）、產出項目；文件存成工作資料夾的 document.json。
+  已提前實作逐字稿 .docx（render/docx_transcript.py、render/roc_date.py）；會議紀錄與心智圖仍待第 2、3 階段，
+  完成後接到本分頁的「產出文件」按鈕。
+- 測試一律透過 tests/conftest.py 隔離 APPDATA 與金鑰，不得讀寫使用者真正的設定檔。
