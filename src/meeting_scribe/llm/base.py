@@ -1,4 +1,7 @@
-"""LLM 介面（SPEC 7.5）：雲端或本機模型都實作同一個介面，模型名稱由設定檔指定。"""
+"""LLM 介面（SPEC 7.5）：文字整理處理（臺灣在地化、之後的摘要）用的服務都實作同一個介面。
+
+模型名稱、推理強度由設定檔指定，不寫死在程式中。
+"""
 
 from __future__ import annotations
 
@@ -21,15 +24,8 @@ class LLMClient(ABC):
     """LLM 用戶端介面。"""
 
     name: str = ""
+    model: str = ""
 
     @abstractmethod
-    def complete_json(
-        self,
-        system: str,
-        user: str,
-        schema: dict[str, Any],
-        model: str,
-        effort: str | None = None,
-        max_tokens: int = 16000,
-    ) -> dict[str, Any]:
+    def complete_json(self, system: str, user: str, schema: dict[str, Any], max_tokens: int = 16000) -> dict[str, Any]:
         """送出一次請求，回傳符合 schema 的 JSON 物件。"""

@@ -58,15 +58,15 @@ def _window(env: dict[str, Any]) -> MainWindow:
 def test_first_run_opens_keys_tab(app: QApplication, env: dict[str, Any]) -> None:
     win = _window(env)  # 預設引擎 azure 沒有金鑰
     assert win.tabs.currentWidget() is win.keys
-    assert "尚未設定" in win.keys.rows["azure_speech_key"].status.text()
-    assert "已設定" in win.keys.rows["openai_api_key"].status.text()
-    assert "用不到" in win.keys.rows["anthropic_api_key"].status.text()
+    assert "尚未設定" in win.keys.editor_for("azure_speech_key").status.text()
+    assert "已設定" in win.keys.editor_for("openai_api_key").status.text()
+    assert win.keys.editor_for("anthropic_api_key").status.text() == "未設定"
     win.close()
 
 
 def test_save_key_and_settings(app: QApplication, env: dict[str, Any]) -> None:
     win = _window(env)
-    win.keys.rows["azure_speech_key"].edit.setText("  az-new-key-1234  ")
+    win.keys.editor_for("azure_speech_key").edit.setText("  az-new-key-1234  ")
     win.keys.azure_region.setCurrentText("eastasia")
     win.keys.soniox_model.setText("stt-async-v7")
     win.transcribe.engine.setCurrentIndex(win.transcribe.engine.findData("soniox"))
@@ -74,7 +74,7 @@ def test_save_key_and_settings(app: QApplication, env: dict[str, Any]) -> None:
     assert win.save_settings(quiet=True)
     assert env["store"]["azure_speech_key"] == "az-new-key-1234"
     assert env["store"]["openai_api_key"] == "sk-old-9999"
-    assert "****1234" in win.keys.rows["azure_speech_key"].status.text()
+    assert "****1234" in win.keys.editor_for("azure_speech_key").status.text()
     with open(env["tmp"] / "appdata" / "MeetingScribe" / "config.toml", "rb") as f:
         saved = tomllib.load(f)
     assert saved["stt"]["azure"]["region"] == "eastasia"
@@ -92,6 +92,30 @@ def test_save_key_and_settings(app: QApplication, env: dict[str, Any]) -> None:
     again.close()
 
 
+def test_two_sections_and_sync(app: QApplication, env: dict[str, Any]) -> None:
+    win = _window(env)
+    keys = win.keys
+    # 「轉錄」換引擎 → 語音轉錄區塊同步，只顯示該服務的金鑰
+    win.transcribe.engine.setCurrentIndex(win.transcribe.engine.findData("soniox"))
+    assert keys.stt_provider() == "soniox"
+    assert keys.stt_editor().name == "soniox_api_key"
+    assert "尚未設定" in keys.stt_editor().status.text()
+    assert "建議設定" in keys.llm_editor().status.text()  # Soniox 需要文字整理做在地化
+    # 語音轉錄區塊換服務 → 「轉錄」分頁同步
+    keys.stt_combo.setCurrentIndex(keys.stt_combo.findData("openai"))
+    assert win.transcribe.engine.currentData() == "openai"
+    # 文字整理處理改用 OpenAI：與語音轉錄共用同一把金鑰
+    keys.llm_combo.setCurrentIndex(keys.llm_combo.findData("openai"))
+    assert keys.llm_editor().name == "openai_api_key"
+    assert not keys.shared_note.isHidden()
+    keys.llm_editor().edit.setText("sk-new-5678")
+    keys.save_key(keys.llm_editor())
+    assert "****5678" in keys.stt_editor().status.text()  # 兩個區塊同時更新
+    assert win.save_settings(quiet=True)
+    assert app_config.load_config()["llm"]["provider"] == "openai"
+    win.close()
+
+
 def test_no_services_tab(app: QApplication, env: dict[str, Any]) -> None:
     win = _window(env)
     labels = [win.tabs.tabText(i) for i in range(win.tabs.count())]
@@ -101,9 +125,9 @@ def test_no_services_tab(app: QApplication, env: dict[str, Any]) -> None:
 
 def test_password_hidden_and_clear(app: QApplication, env: dict[str, Any]) -> None:
     win = _window(env)
-    row = win.keys.rows["openai_api_key"]
+    row = win.keys.editor_for("openai_api_key")
     assert row.edit.echoMode() == QLineEdit.EchoMode.Password
-    row.show.setChecked(True)
+    row.reveal.setChecked(True)
     assert row.edit.echoMode() == QLineEdit.EchoMode.Normal
     win.keys.clear_key("openai_api_key")
     assert "openai_api_key" not in env["store"]

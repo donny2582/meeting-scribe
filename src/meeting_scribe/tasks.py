@@ -98,17 +98,17 @@ def transcribe_audio(
 
 def localize_if_possible(result: SttResult, cfg: dict[str, Any], entries: list[Any],
                          report: ProgressCallback) -> SttResult:
-    """有 Anthropic 金鑰時，立即由 AI 做臺灣繁體在地化；沒有金鑰或失敗時保留自動繁體轉換的結果。"""
-    from meeting_scribe.llm.base import LLMError
+    """有文字整理服務的金鑰時，立即由 AI 做臺灣繁體在地化；沒有金鑰或失敗時保留自動繁體轉換的結果。"""
+    from meeting_scribe.llm import LLM_PROVIDERS, LLMError, create_llm, provider_of
 
-    if not get_secret("anthropic_api_key"):
-        report(100, "未設定 Anthropic 金鑰：中文只做自動繁體轉換，未做 AI 臺灣在地化")
+    label, key_name = LLM_PROVIDERS[provider_of(cfg)]
+    if not get_secret(key_name):
+        report(100, f"未設定 {label} 金鑰：中文只做自動繁體轉換，未做 AI 臺灣在地化")
         return result
-    from meeting_scribe.llm.anthropic_llm import AnthropicLLM
     from meeting_scribe.postprocess.localize import localize_result
 
     try:
-        return localize_result(result, AnthropicLLM(cfg), cfg, entries, report)
+        return localize_result(result, create_llm(cfg), cfg, entries, report)
     except LLMError as exc:
         log.error("臺灣在地化失敗：%s", exc)
         report(100, f"AI 臺灣在地化失敗（已保留自動繁體轉換的結果）：{exc}")
@@ -139,7 +139,7 @@ def write_transcript_txt(result: SttResult, path: Path) -> Path:
     if result.localized_by and not result.needs_zh_tw_localization:
         lines.append(f"中文字形：已轉為臺灣繁體，並由 AI 完成臺灣在地化校潤（{result.localized_by}）")
     elif result.script_conversion:
-        lines.append("中文字形：已自動轉為臺灣繁體；尚未完成 AI 臺灣在地化（需設定 Anthropic API 金鑰）")
+        lines.append("中文字形：已自動轉為臺灣繁體；尚未完成 AI 臺灣在地化（需設定文字整理處理的 API 金鑰）")
     lines.append("")
     for s in result.segments:
         mark = "（疑似）" if s.speaker_uncertain else ""

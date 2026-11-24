@@ -1,8 +1,10 @@
-"""「API 金鑰」分頁（SPEC 4.4）。
+"""「API 金鑰」分頁（SPEC 4.4）：只有兩個區塊。
 
-- 每個服務一個區塊：金鑰，以及該服務需要的附加設定（Azure 區域、模型名稱）。
+- 語音轉錄：選擇服務（Azure／OpenAI／Soniox），只顯示該服務的金鑰與附加設定（區域、模型名稱）；
+  與「轉錄」分頁的引擎同步。
+- 文字整理處理：選擇服務（Anthropic／OpenAI），用於臺灣繁體在地化與之後的會議紀錄摘要。
 - API 金鑰存在 Windows 認證管理員，畫面只顯示末 4 碼；狀態以顏色區分：
-  綠＝已設定、紅＝目前選的引擎需要但尚未設定、灰＝目前用不到。
+  綠＝已設定、紅＝目前選的服務需要但尚未設定、橘＝建議設定、灰＝目前用不到。
 - 附加設定寫入使用者設定檔 ``%APPDATA%\\MeetingScribe\\config.toml``（只寫覆寫的項目）。
 - 引擎、會議語言、輸出資料夾在「轉錄」分頁選擇，並記住上次的選擇；API 單價只在設定檔中調整。
 """
@@ -11,7 +13,6 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable
-from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -27,6 +28,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -37,11 +39,16 @@ from meeting_scribe.gui.widgets import ERROR_COLOR, OK_COLOR, WARN_COLOR, hint
 AZURE_REGIONS = ["eastasia", "southeastasia", "japaneast", "japanwest", "koreacentral",
                  "eastus", "westus2", "westeurope"]
 ENGINES = (("azure", "Azure AI Speech"), ("openai", "OpenAI"), ("soniox", "Soniox"))
+#: 語音轉錄服務：（代碼, 顯示名稱, 金鑰名稱）
+STT_SERVICES = (("azure", "Azure AI Speech", "azure_speech_key"), ("openai", "OpenAI", "openai_api_key"),
+                ("soniox", "Soniox", "soniox_api_key"))
+#: 文字整理處理服務
+LLM_SERVICES = (("anthropic", "Anthropic Claude", "anthropic_api_key"), ("openai", "OpenAI", "openai_api_key"))
 KEY_HELP = {
     "azure_speech_key": "Azure 入口網站 → 語音服務資源 →「金鑰與端點」",
     "openai_api_key": "platform.openai.com → API keys",
     "soniox_api_key": "console.soniox.com → 專案 → API Keys",
-    "anthropic_api_key": "console.anthropic.com → API Keys（臺灣繁體在地化、之後的會議紀錄摘要使用）",
+    "anthropic_api_key": "console.anthropic.com → API Keys",
 }
 
 
@@ -87,27 +94,46 @@ def check_key(name: str, key: str, cfg: dict[str, Any]) -> tuple[bool, str]:
     return False, f"伺服器回應 HTTP {resp.status_code}，請確認區域或端點設定"
 
 
-@dataclass
-class KeyRow:
-    """一把金鑰的元件。"""
-
-    name: str
-    status: QLabel
-    edit: QLineEdit
-    show: QCheckBox
-    save: QPushButton
-    test: QPushButton
-    clear: QPushButton
-
-
 class _TestSignals(QObject):
-    done = Signal(str, bool, str)
+    done = Signal(object, bool, str)
+
+
+class KeyEditor(QWidget):
+    """一把金鑰的輸入列：狀態、輸入框、顯示、儲存、測試連線、清除。"""
+
+    def __init__(self, page: KeysPage, name: str) -> None:
+        super().__init__()
+        self.page, self.name = page, name
+        self.status = QLabel()
+        self.edit = QLineEdit()
+        self.edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.edit.setPlaceholderText("貼上新的金鑰")
+        self.reveal = QCheckBox("顯示")
+        self.reveal.toggled.connect(lambda on: self.edit.setEchoMode(
+            QLineEdit.EchoMode.Normal if on else QLineEdit.EchoMode.Password))
+        self.save = QPushButton("儲存")
+        self.save.clicked.connect(lambda: page.save_key(self))
+        self.edit.returnPressed.connect(lambda: page.save_key(self))
+        self.test = QPushButton("測試連線")
+        self.test.clicked.connect(lambda: page.test_key(self))
+        self.clear = QPushButton("清除")
+        self.clear.clicked.connect(lambda: page.clear_key(self.name))
+        row = QHBoxLayout()
+        row.addWidget(self.edit, 1)
+        for w in (self.reveal, self.save, self.test, self.clear):
+            row.addWidget(w)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(self.status)
+        lay.addLayout(row)
 
 
 class KeysPage(QWidget):
-    """「API 金鑰」分頁。"""
+    """「API 金鑰」分頁：語音轉錄、文字整理處理兩個區塊。"""
 
     keys_changed = Signal()
+    stt_changed = Signal(str)
+    llm_changed = Signal(str)
 
     def __init__(
         self,
@@ -120,18 +146,29 @@ class KeysPage(QWidget):
         self._cfg_provider = cfg_provider
         self._get, self._set, self._delete = get_secret, set_secret, delete_secret
         self._needed: set[str] = set()
-        self.rows: dict[str, KeyRow] = {}
+        self._recommended: dict[str, str] = {}
+        self.editors: list[KeyEditor] = []
         self._signals = _TestSignals()
         self._signals.done.connect(self._on_test_done)
-
         cfg = cfg_provider()
         stt = cfg.get("stt", {})
+        llm = cfg.get("llm", {})
+
         body = QWidget()
         lay = QVBoxLayout(body)
-        lay.addWidget(hint("只需要設定你會用到的服務。金鑰存在 Windows 認證管理員，不會寫進設定檔，畫面只顯示末 4 碼。"
-                           "貼上後按該列的「儲存」；「測試連線」會確認金鑰是否有效。"))
+        lay.addWidget(hint("只要設定你會用到的服務。金鑰存在 Windows 認證管理員，不會寫進設定檔，畫面只顯示末 4 碼。"))
 
-        # 各服務的附加設定（金鑰以外）
+        # ---- 區塊 1：語音轉錄 ----
+        box = QGroupBox("1. 語音轉錄")
+        v = QVBoxLayout(box)
+        v.addWidget(hint("把錄音轉成逐字稿的服務；與「轉錄」分頁的引擎同步。"))
+        self.stt_combo = QComboBox()
+        for code, label, _ in STT_SERVICES:
+            self.stt_combo.addItem(label, code)
+        form = QFormLayout()
+        form.addRow("服務：", self.stt_combo)
+        v.addLayout(form)
+        self.stt_stack = QStackedWidget()
         self.azure_region = QComboBox()
         self.azure_region.setEditable(True)
         self.azure_region.addItems(AZURE_REGIONS)
@@ -140,54 +177,46 @@ class KeysPage(QWidget):
         self.azure_endpoint = QLineEdit(stt.get("azure", {}).get("endpoint", ""))
         self.azure_endpoint.setPlaceholderText("通常留空")
         self.openai_model = QLineEdit(stt.get("openai", {}).get("model", ""))
-        self.openai_model.setPlaceholderText("通常不用改")
         self.soniox_model = QLineEdit(stt.get("soniox", {}).get("model", ""))
-        self.soniox_model.setPlaceholderText("通常不用改")
-        extras: dict[str, list[tuple[str, QWidget]]] = {
-            "azure_speech_key": [("區域：", self.azure_region), ("自訂端點：", self.azure_endpoint)],
-            "openai_api_key": [("模型名稱：", self.openai_model)],
-            "soniox_api_key": [("模型名稱：", self.soniox_model)],
+        stt_extras: dict[str, list[tuple[str, QWidget]]] = {
+            "azure": [("區域：", self.azure_region), ("自訂端點：", self.azure_endpoint)],
+            "openai": [("語音轉錄模型：", self.openai_model)],
+            "soniox": [("模型名稱：", self.soniox_model)],
         }
-        notes = {
-            "soniox_api_key": "Soniox 的中文會自動轉成臺灣繁體；有設定 Anthropic 金鑰時，"
-                              "轉錄完成後會立即由 AI 校潤成臺灣繁體中文與臺灣在地用語。",
-            "anthropic_api_key": "設定後，Soniox 轉錄完成時會立即由 AI 做臺灣繁體在地化"
-                                 "（2 小時會議約 US$1，依實際用量計費）。",
+        stt_notes = {"soniox": "Soniox 的中文會先自動轉成繁體，再由下方「文字整理處理」的 AI 校潤成臺灣繁體中文與在地用語。"}
+        for code, _label, key in STT_SERVICES:
+            self.stt_stack.addWidget(self._service_page(key, stt_extras.get(code, []), stt_notes.get(code)))
+        v.addWidget(self.stt_stack)
+        lay.addWidget(box)
+
+        # ---- 區塊 2：文字整理處理 ----
+        box = QGroupBox("2. 文字整理處理")
+        v = QVBoxLayout(box)
+        v.addWidget(hint("用 AI 把逐字稿校潤成臺灣繁體中文與在地用語（Soniox 轉錄完成時立即執行），"
+                         "之後也用來產生會議紀錄摘要。2 小時會議的在地化約 US$1，依實際用量計費。"))
+        self.llm_combo = QComboBox()
+        for code, label, _ in LLM_SERVICES:
+            self.llm_combo.addItem(label, code)
+        form = QFormLayout()
+        form.addRow("服務：", self.llm_combo)
+        v.addLayout(form)
+        self.llm_stack = QStackedWidget()
+        self.anthropic_model = QLineEdit(llm.get("anthropic", {}).get("model", ""))
+        self.llm_openai_model = QLineEdit(llm.get("openai", {}).get("model", ""))
+        self.shared_note = hint("與上方語音轉錄共用同一把 OpenAI 金鑰。")
+        llm_extras = {
+            "anthropic": [("模型名稱：", self.anthropic_model)],
+            "openai": [("文字整理模型：", self.llm_openai_model)],
         }
-        for name, label in app_config.SECRET_NAMES.items():
-            box = QGroupBox(label)
-            v = QVBoxLayout(box)
-            status = QLabel()
-            edit = QLineEdit()
-            edit.setEchoMode(QLineEdit.EchoMode.Password)
-            edit.setPlaceholderText("貼上新的金鑰")
-            show = QCheckBox("顯示")
-            show.toggled.connect(lambda on, e=edit: e.setEchoMode(
-                QLineEdit.EchoMode.Normal if on else QLineEdit.EchoMode.Password))
-            save = QPushButton("儲存")
-            save.clicked.connect(lambda _=False, n=name: self.save_key(n))
-            edit.returnPressed.connect(lambda n=name: self.save_key(n))
-            test = QPushButton("測試連線")
-            test.clicked.connect(lambda _=False, n=name: self.test_key(n))
-            clear = QPushButton("清除")
-            clear.clicked.connect(lambda _=False, n=name: self.clear_key(n))
-            row = QHBoxLayout()
-            row.addWidget(edit, 1)
-            for w in (show, save, test, clear):
-                row.addWidget(w)
-            v.addWidget(status)
-            v.addLayout(row)
-            if name in extras:
-                form = QFormLayout()
-                for text, widget in extras[name]:
-                    form.addRow(text, widget)
-                v.addLayout(form)
-            v.addWidget(hint(f"取得方式：{KEY_HELP.get(name, '')}"))
-            if name in notes:
-                v.addWidget(hint(notes[name]))
-            lay.addWidget(box)
-            self.rows[name] = KeyRow(name, status, edit, show, save, test, clear)
+        for code, _label, key in LLM_SERVICES:
+            page = self._service_page(key, llm_extras[code], None)
+            if code == "openai":
+                page.layout().addWidget(self.shared_note)
+            self.llm_stack.addWidget(page)
+        v.addWidget(self.llm_stack)
+        lay.addWidget(box)
         lay.addStretch(1)
+
         area = QScrollArea()
         area.setWidgetResizable(True)
         area.setFrameShape(QScrollArea.Shape.NoFrame)
@@ -195,102 +224,177 @@ class KeysPage(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(area)
+
+        self.stt_combo.currentIndexChanged.connect(self._on_stt_changed)
+        self.llm_combo.currentIndexChanged.connect(self._on_llm_changed)
+        self.set_stt(stt.get("default_engine", "azure"))
+        idx = self.llm_combo.findData(llm.get("provider", "anthropic"))
+        self.llm_combo.setCurrentIndex(max(idx, 0))
+        self._on_llm_changed()
         self.refresh()
 
-    def updates(self) -> dict[str, Any]:
-        """各服務附加設定（區域、模型名稱），寫入使用者設定檔用。"""
-        return {
-            "azure": {"region": self.azure_region.currentText().strip(),
-                      "endpoint": self.azure_endpoint.text().strip()},
-            "openai": {"model": self.openai_model.text().strip()},
-            "soniox": {"model": self.soniox_model.text().strip()},
-        }
+    def _service_page(self, key: str, extras: list[tuple[str, QWidget]], note: str | None) -> QWidget:
+        page = QWidget()
+        v = QVBoxLayout(page)
+        v.setContentsMargins(0, 0, 0, 0)
+        editor = KeyEditor(self, key)
+        self.editors.append(editor)
+        v.addWidget(editor)
+        if extras:
+            form = QFormLayout()
+            for text, widget in extras:
+                form.addRow(text, widget)
+            v.addLayout(form)
+        v.addWidget(hint(f"取得方式：{KEY_HELP.get(key, '')}"))
+        if note:
+            v.addWidget(hint(note))
+        return page
 
-    def has_azure_location(self) -> bool:
-        return bool(self.azure_region.currentText().strip() or self.azure_endpoint.text().strip())
+    # ---- 服務選擇 ----
+    def stt_provider(self) -> str:
+        return str(self.stt_combo.currentData())
 
+    def llm_provider(self) -> str:
+        return str(self.llm_combo.currentData())
+
+    def set_stt(self, code: str) -> None:
+        """切換語音轉錄服務（不發出 stt_changed，避免與「轉錄」分頁互相觸發）。"""
+        idx = self.stt_combo.findData(code)
+        if idx < 0:
+            return
+        self.stt_combo.blockSignals(True)
+        self.stt_combo.setCurrentIndex(idx)
+        self.stt_combo.blockSignals(False)
+        self.stt_stack.setCurrentIndex(idx)
+        self._update_shared_note()
+
+    def _on_stt_changed(self, _i: int = 0) -> None:
+        self.stt_stack.setCurrentIndex(self.stt_combo.currentIndex())
+        self._update_shared_note()
+        self.stt_changed.emit(self.stt_provider())
+
+    def _on_llm_changed(self, _i: int = 0) -> None:
+        self.llm_stack.setCurrentIndex(self.llm_combo.currentIndex())
+        self.llm_changed.emit(self.llm_provider())
+
+    def _update_shared_note(self) -> None:
+        self.shared_note.setVisible(self.stt_provider() == "openai")
+
+    def stt_editor(self) -> KeyEditor:
+        return self.editors[self.stt_combo.currentIndex()]
+
+    def llm_editor(self) -> KeyEditor:
+        return self.editors[len(STT_SERVICES) + self.llm_combo.currentIndex()]
+
+    def editor_for(self, name: str) -> KeyEditor:
+        """某把金鑰的輸入列（優先回傳目前顯示中的那一個）。"""
+        for editor in (self.stt_editor(), self.llm_editor()):
+            if editor.name == name:
+                return editor
+        return next(e for e in self.editors if e.name == name)
+
+    # ---- 狀態 ----
     def set_needed(self, needed: set[str], recommended: dict[str, str] | None = None) -> None:
-        """設定目前選的引擎需要（必要）與建議設定的金鑰（名稱 → 原因），並更新狀態顏色。"""
+        """設定必要（紅）與建議（橘，名稱 → 原因）的金鑰，並更新狀態顏色。"""
         self._needed = needed
         self._recommended = recommended or {}
         self.refresh()
 
     def refresh(self) -> None:
-        """更新每把金鑰的狀態文字與顏色。"""
-        for name, row in self.rows.items():
-            value = self._get(name)
+        """更新每一列的狀態文字與顏色。"""
+        for editor in self.editors:
+            value = self._get(editor.name)
             if value:
                 text, color = f"✔ 已設定（{app_config.mask_secret(value)}）", OK_COLOR
-            elif name in self._needed:
-                text, color = "✘ 尚未設定（目前選擇的引擎需要這把金鑰）", ERROR_COLOR
-            elif name in getattr(self, "_recommended", {}):
-                text, color = f"建議設定（{self._recommended[name]}）", WARN_COLOR
+            elif editor.name in self._needed:
+                text, color = "✘ 尚未設定（目前選擇的服務需要這把金鑰）", ERROR_COLOR
+            elif editor.name in self._recommended:
+                text, color = f"建議設定（{self._recommended[editor.name]}）", WARN_COLOR
             else:
-                text, color = "未設定（目前用不到）", "gray"
-            row.status.setText(text)
-            row.status.setStyleSheet(f"color: {color}; font-weight: bold;")
+                text, color = "未設定", "gray"
+            editor.status.setText(text)
+            editor.status.setStyleSheet(f"color: {color}; font-weight: bold;")
 
+    # ---- 金鑰操作 ----
     def pending(self) -> list[str]:
-        """已輸入但尚未儲存的金鑰。"""
-        return [n for n, r in self.rows.items() if r.edit.text().strip()]
+        """已輸入但尚未儲存的金鑰名稱。"""
+        return list(dict.fromkeys(e.name for e in self.editors if e.edit.text().strip()))
 
-    def save_key(self, name: str, quiet: bool = False) -> bool:
+    def save_key(self, editor: KeyEditor, quiet: bool = False) -> bool:
         """儲存一把金鑰。"""
-        row = self.rows[name]
-        value = row.edit.text().strip()
+        value = editor.edit.text().strip()
         if not value:
             if not quiet:
                 QMessageBox.information(self, "儲存金鑰", "請先貼上金鑰。")
             return False
         try:
-            self._set(name, value)
+            self._set(editor.name, value)
         except Exception as exc:  # noqa: BLE001 - 顯示給使用者
             QMessageBox.critical(self, "儲存金鑰", f"儲存失敗：{exc}")
             return False
-        row.edit.clear()
-        row.show.setChecked(False)
+        editor.edit.clear()
+        editor.reveal.setChecked(False)
         self.refresh()
         self.keys_changed.emit()
         return True
 
     def save_pending(self) -> list[str]:
         """儲存所有已輸入的金鑰，回傳成功的名稱。"""
-        return [n for n in self.pending() if self.save_key(n, quiet=True)]
+        return [e.name for e in self.editors if e.edit.text().strip() and self.save_key(e, quiet=True)]
 
     def clear_key(self, name: str) -> None:
         """刪除已儲存的金鑰（先確認）。"""
-        label = app_config.SECRET_NAMES[name]
         if not self._get(name):
             return
+        label = app_config.SECRET_NAMES[name]
         answer = QMessageBox.question(self, "清除金鑰", f"確定要從 Windows 認證管理員刪除「{label}」嗎？")
         if answer == QMessageBox.StandardButton.Yes:
             self._delete(name)
             self.refresh()
             self.keys_changed.emit()
 
-    def test_key(self, name: str) -> None:
+    def test_key(self, editor: KeyEditor) -> None:
         """在背景測試金鑰；有輸入新金鑰時測試新金鑰。"""
-        row = self.rows[name]
-        key = row.edit.text().strip() or self._get(name)
+        key = editor.edit.text().strip() or self._get(editor.name)
         if not key:
             QMessageBox.information(self, "測試連線", "請先貼上金鑰。")
             return
-        cfg = app_config._deep_merge(self._cfg_provider(), {"stt": self.updates()})  # 用畫面上尚未儲存的值
-        row.test.setEnabled(False)
-        row.test.setText("測試中…")
+        cfg = app_config._deep_merge(self._cfg_provider(), self.updates())  # 用畫面上尚未儲存的值
+        editor.test.setEnabled(False)
+        editor.test.setText("測試中…")
 
         def work() -> None:
-            ok, msg = check_key(name, key, cfg)
-            self._signals.done.emit(name, ok, msg)
+            ok, msg = check_key(editor.name, key, cfg)
+            self._signals.done.emit(editor, ok, msg)
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _on_test_done(self, name: str, ok: bool, msg: str) -> None:
-        row = self.rows[name]
-        row.test.setEnabled(True)
-        row.test.setText("測試連線")
-        label = app_config.SECRET_NAMES[name]
+    def _on_test_done(self, editor: KeyEditor, ok: bool, msg: str) -> None:
+        editor.test.setEnabled(True)
+        editor.test.setText("測試連線")
+        label = app_config.SECRET_NAMES[editor.name]
         if ok:
             QMessageBox.information(self, "測試連線", f"{label}：{msg}")
         else:
             QMessageBox.warning(self, "測試連線", f"{label}：{msg}")
+
+    # ---- 設定 ----
+    def has_azure_location(self) -> bool:
+        return bool(self.azure_region.currentText().strip() or self.azure_endpoint.text().strip())
+
+    def updates(self) -> dict[str, Any]:
+        """要寫入使用者設定檔的項目。"""
+        return {
+            "stt": {
+                "default_engine": self.stt_provider(),
+                "azure": {"region": self.azure_region.currentText().strip(),
+                          "endpoint": self.azure_endpoint.text().strip()},
+                "openai": {"model": self.openai_model.text().strip()},
+                "soniox": {"model": self.soniox_model.text().strip()},
+            },
+            "llm": {
+                "provider": self.llm_provider(),
+                "anthropic": {"model": self.anthropic_model.text().strip()},
+                "openai": {"model": self.llm_openai_model.text().strip()},
+            },
+        }

@@ -30,9 +30,11 @@ class FakeLLM(LLMClient):
         self.replies = replies
         self.calls: list[dict[str, Any]] = []
 
-    def complete_json(self, system: str, user: str, schema: dict, model: str, effort: str | None = None,
-                      max_tokens: int = 16000) -> dict[str, Any]:
-        self.calls.append({"system": system, "user": user, "model": model, "effort": effort})
+    name = "fake"
+    model = "fake-model"
+
+    def complete_json(self, system: str, user: str, schema: dict, max_tokens: int = 16000) -> dict[str, Any]:
+        self.calls.append({"system": system, "user": user})
         reply = self.replies.pop(0)
         if isinstance(reply, Exception):
             raise reply
@@ -61,12 +63,11 @@ def test_localize_only_chinese_segments() -> None:
     assert [s.text for s in out.segments] == [
         "請公路局在後面發表資料", "Our team holds a patent.", "日本の気象庁です", "這個專案的影片要改善"]
     assert not out.needs_zh_tw_localization
-    assert out.localized_by == f"anthropic {cfg['llm']['localize_model']}"
+    assert out.localized_by == "fake fake-model"
     call = llm.calls[0]
     assert "気象庁" not in call["user"] and "patent" not in call["user"]  # 日文、英文不送出
     assert "視頻 → 影片" in call["system"] and "公路局" in call["system"]  # 用語對照表與詞庫
     assert call["system"].startswith(SYSTEM_PROMPT[:20])
-    assert call["effort"] == cfg["llm"]["localize_effort"]
 
 
 def test_invalid_reply_retries_then_keeps_opencc() -> None:
@@ -108,7 +109,7 @@ def test_localize_if_possible_without_key(monkeypatch: pytest.MonkeyPatch) -> No
     messages: list[str] = []
     out = tasks.localize_if_possible(_result(), load_config(), [], lambda p, m: messages.append(m))
     assert out.needs_zh_tw_localization
-    assert any("未設定 Anthropic 金鑰" in m for m in messages)
+    assert any("未設定 Anthropic Claude 金鑰" in m for m in messages)
 
 
 def test_localize_if_possible_keeps_result_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -143,6 +144,7 @@ def _response(stop_reason: str = "end_turn", text: str = '{"items": []}') -> Any
 
 def _llm(response: Any) -> tuple[AnthropicLLM, _FakeMessages]:
     llm = AnthropicLLM(load_config(), api_key="sk-ant-test")
+    llm.effort = "low"
     fake = _FakeMessages(response)
     llm.client = SimpleNamespace(beta=SimpleNamespace(messages=fake), messages=fake)  # type: ignore[assignment]
     return llm, fake
@@ -150,7 +152,7 @@ def _llm(response: Any) -> tuple[AnthropicLLM, _FakeMessages]:
 
 def test_anthropic_request_shape() -> None:
     llm, fake = _llm(_response())
-    assert llm.complete_json("sys", "user", {"type": "object"}, "claude-opus-5-5", "low") == {"items": []}
+    assert llm.complete_json("sys", "user", {"type": "object"}) == {"items": []}
     kw = fake.kwargs
     assert kw["model"] == "claude-opus-5-5"
     assert kw["betas"] == [FALLBACK_BETA] and kw["fallbacks"] == "default"
@@ -160,11 +162,11 @@ def test_anthropic_request_shape() -> None:
 
 def test_anthropic_refusal_and_bad_json() -> None:
     with pytest.raises(LLMError, match="拒絕"):
-        _llm(_response("refusal"))[0].complete_json("s", "u", {}, "m")
+        _llm(_response("refusal"))[0].complete_json("s", "u", {})
     with pytest.raises(LLMError, match="JSON"):
-        _llm(_response(text="not json"))[0].complete_json("s", "u", {}, "m")
+        _llm(_response(text="not json"))[0].complete_json("s", "u", {})
     with pytest.raises(LLMError, match="長度上限"):
-        _llm(_response("max_tokens"))[0].complete_json("s", "u", {}, "m")
+        _llm(_response("max_tokens"))[0].complete_json("s", "u", {})
 
 
 def test_anthropic_requires_key(monkeypatch: pytest.MonkeyPatch) -> None:

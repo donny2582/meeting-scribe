@@ -1,6 +1,6 @@
 """Anthropic Claude 實作（官方 SDK）。
 
-- 模型名稱、effort 由設定檔指定，不寫死在程式中。
+- 模型名稱、effort 由設定檔 ``[llm.anthropic]`` 指定，不寫死在程式中。
 - 以結構化輸出（output_config.format = json_schema）取得保證可解析的 JSON。
 - 啟用伺服器端備援（server-side fallback）：主要模型拒絕回答時，API 會自動改用備援模型完成同一個請求。
 - 目前的模型不接受 temperature 等取樣參數，因此不送出。
@@ -32,29 +32,24 @@ class AnthropicLLM(LLMClient):
         if not key:
             raise LLMError("尚未設定 Anthropic API 金鑰：請在「API 金鑰」分頁輸入", fatal=True)
         llm_cfg = cfg.get("llm", {})
-        self.use_fallbacks = bool(llm_cfg.get("server_side_fallback", True))
+        own = llm_cfg.get("anthropic", {})
+        self.model = str(own.get("model", ""))
+        self.effort = own.get("effort") or None
+        self.use_fallbacks = bool(own.get("server_side_fallback", True))
         self.client = anthropic.Anthropic(
             api_key=key,
             max_retries=int(llm_cfg.get("max_retries", 3)),
             timeout=float(llm_cfg.get("timeout_sec", 600)),
         )
 
-    def complete_json(
-        self,
-        system: str,
-        user: str,
-        schema: dict[str, Any],
-        model: str,
-        effort: str | None = None,
-        max_tokens: int = 16000,
-    ) -> dict[str, Any]:
-        if not model:
-            raise LLMError("尚未設定 LLM 模型名稱（設定檔 [llm]）", fatal=True)
+    def complete_json(self, system: str, user: str, schema: dict[str, Any], max_tokens: int = 16000) -> dict[str, Any]:
+        if not self.model:
+            raise LLMError("尚未設定 Anthropic 模型名稱", fatal=True)
         output_config: dict[str, Any] = {"format": {"type": "json_schema", "schema": schema}}
-        if effort:
-            output_config["effort"] = effort
+        if self.effort:
+            output_config["effort"] = self.effort
         kwargs: dict[str, Any] = {
-            "model": model,
+            "model": self.model,
             "max_tokens": max_tokens,
             "system": system,
             "messages": [{"role": "user", "content": user}],
@@ -62,9 +57,7 @@ class AnthropicLLM(LLMClient):
         }
         try:
             if self.use_fallbacks:
-                response = self.client.beta.messages.create(
-                    betas=[FALLBACK_BETA], fallbacks="default", **kwargs
-                )
+                response = self.client.beta.messages.create(betas=[FALLBACK_BETA], fallbacks="default", **kwargs)
             else:
                 response = self.client.messages.create(**kwargs)
         except anthropic.AuthenticationError as exc:
@@ -72,13 +65,13 @@ class AnthropicLLM(LLMClient):
         except anthropic.PermissionDeniedError as exc:
             raise LLMError(f"Anthropic API 金鑰沒有權限：{exc.message}", fatal=True) from exc
         except anthropic.NotFoundError as exc:
-            raise LLMError(f"找不到模型「{model}」，請確認設定檔 [llm] 的模型名稱", fatal=True) from exc
+            raise LLMError(f"找不到模型「{self.model}」，請確認「API 金鑰」分頁的模型名稱", fatal=True) from exc
         except anthropic.RateLimitError as exc:
             raise LLMError("Anthropic 請求過多或額度不足，請稍後再試", fatal=True) from exc
         except anthropic.BadRequestError as exc:
             raise LLMError(f"Anthropic 請求格式錯誤：{exc.message}", fatal=True) from exc
         except anthropic.APIStatusError as exc:
-            raise LLMError(f"Anthropic 服務錯誤（HTTP {exc.status_code}）") from exc
+            raise LLMError(f"Anthropic 服務錯誤（HTTP {exc.status_code}）", fatal=True) from exc
         except anthropic.APIConnectionError as exc:
             raise LLMError("無法連線到 Anthropic，請檢查網路", fatal=True) from exc
 

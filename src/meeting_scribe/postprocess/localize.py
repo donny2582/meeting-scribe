@@ -1,6 +1,6 @@
 """臺灣繁體中文在地化（LLM）。
 
-設定了 Anthropic API 金鑰時，凡是 ``SttResult.needs_zh_tw_localization`` 為 True 的轉錄結果
+設定了文字整理處理服務（Anthropic 或 OpenAI）的金鑰時，凡是 ``SttResult.needs_zh_tw_localization`` 為 True 的轉錄結果
 （目前為 Soniox），轉錄完成後立即執行本步驟，之後的詞庫校正、翻譯、贅字刪除都以本步驟的結果為準：
 
 1. 只處理中文片段（日文、韓文片段不送出，英文片段 OpenCC 不會改動，也不送出）。
@@ -11,7 +11,7 @@
    不通過時重試一次，仍失敗就保留 OpenCC 結果並寫入日誌（不記錄內容）。
 5. 原始引擎文字保存在 stt_raw.json，不受影響。
 
-沒有 Anthropic 金鑰時跳過本步驟，只保留 OpenCC 轉換結果。
+沒有金鑰時跳過本步驟，只保留 OpenCC 轉換結果。
 """
 
 from __future__ import annotations
@@ -132,10 +132,7 @@ def localize_result(
     progress: ProgressFn | None = None,
 ) -> SttResult:
     """對轉錄結果的中文片段做臺灣在地化，回傳新的 SttResult。"""
-    llm_cfg = cfg.get("llm", {})
-    model = str(llm_cfg.get("localize_model", ""))
-    effort = llm_cfg.get("localize_effort") or None
-    max_chars = int(llm_cfg.get("localize_batch_chars", 3000))
+    max_chars = int(cfg.get("llm", {}).get("localize_batch_chars", 3000))
     system = SYSTEM_PROMPT + "\n\n" + build_reference(load_term_map(), glossary or [])
 
     items = [(f"S{i:04d}", s.text) for i, s in enumerate(result.segments) if _is_chinese(s)]
@@ -148,7 +145,7 @@ def localize_result(
         user = "請校潤以下片段：\n" + _to_json(batch)
         for attempt in (1, 2):
             try:
-                data = llm.complete_json(system, user, SCHEMA, model, effort)
+                data = llm.complete_json(system, user, SCHEMA)
                 updated.update(validate_batch(batch, data))
                 break
             except LLMError as exc:
@@ -168,7 +165,7 @@ def localize_result(
     return result.model_copy(update={
         "segments": segments,
         "needs_zh_tw_localization": failed > 0,
-        "localized_by": f"anthropic {model}",
+        "localized_by": f"{llm.name} {llm.model}",
     })
 
 

@@ -66,6 +66,8 @@ class MainWindow(QMainWindow):
         self.glossary = GlossaryPage(on_changed=self._glossaries_changed)
         self.keys = KeysPage(lambda: self.cfg, **(secret_store or {}))
         self.keys.keys_changed.connect(self.engines_changed)
+        self.keys.llm_changed.connect(lambda _c: self.engines_changed())
+        self.keys.stt_changed.connect(self._stt_from_keys)
 
         self.tabs = QTabWidget()
         self._pages = {
@@ -120,12 +122,24 @@ class MainWindow(QMainWindow):
         self.tabs.setCurrentWidget(self._pages[page][0])
 
     def engines_changed(self) -> None:
-        """依目前選擇的引擎更新金鑰分頁的「需要」提示。"""
-        engines = {*self.transcribe.selected_engines(),
-                   *self.benchmark.selected_engines()}
-        recommended = {"anthropic_api_key": "Soniox 的 AI 臺灣在地化會用到"} if "soniox" in engines else {}
-        self.keys.set_needed({app_config.ENGINE_KEYS[e] for e in engines if e in app_config.ENGINE_KEYS},
-                             recommended)
+        """「轉錄」分頁換引擎時，同步「API 金鑰」的語音轉錄服務，並更新必要／建議金鑰提示。"""
+        from meeting_scribe.llm import LLM_PROVIDERS
+
+        engine = self.transcribe.selected_engines()[0]
+        self.keys.set_stt(engine)
+        recommended = {}
+        if engine == "soniox":
+            recommended[LLM_PROVIDERS[self.keys.llm_provider()][1]] = "Soniox 的 AI 臺灣在地化會用到"
+        self.keys.set_needed({app_config.ENGINE_KEYS[engine]}, recommended)
+
+    def _stt_from_keys(self, code: str) -> None:
+        """在「API 金鑰」換語音轉錄服務時，同步「轉錄」分頁的引擎。"""
+        combo = self.transcribe.engine
+        idx = combo.findData(code)
+        if idx >= 0 and idx != combo.currentIndex():
+            combo.setCurrentIndex(idx)  # 會觸發 engines_changed
+        else:
+            self.engines_changed()
 
     def prepare_run(self, engines: list[str]) -> dict[str, Any] | None:
         """執行前：儲存設定 → 檢查金鑰、Azure 區域、ffmpeg。可以執行時回傳最新設定。"""
@@ -137,6 +151,8 @@ class MainWindow(QMainWindow):
         missing = tasks.missing_keys(engines)
         if missing:
             self.go_to("keys")
+            first = next(e for e in engines if app_config.ENGINE_KEYS.get(e) in missing)
+            self.keys.set_stt(first)
             names = "\n".join(f"・{app_config.SECRET_NAMES[k]}" for k in missing)
             QMessageBox.warning(self, "缺少 API 金鑰",
                                 f"所選引擎需要以下金鑰，但尚未設定：\n\n{names}\n\n請貼上金鑰並按「儲存」。")
@@ -144,8 +160,9 @@ class MainWindow(QMainWindow):
         az = self.cfg.get("stt", {}).get("azure", {})
         if "azure" in engines and not (az.get("region") or az.get("endpoint")):
             self.go_to("keys")
+            self.keys.set_stt("azure")
             self.keys.azure_region.setFocus()
-            QMessageBox.warning(self, "缺少 Azure 區域", "請在「API 金鑰」分頁的 Azure 區塊選擇區域。")
+            QMessageBox.warning(self, "缺少 Azure 區域", "請在「API 金鑰」分頁的語音轉錄區塊選擇 Azure 區域。")
             return None
         if engines:
             from meeting_scribe.audio.preprocess import AudioError, find_ffmpeg
@@ -177,11 +194,11 @@ class MainWindow(QMainWindow):
         """要寫入設定檔的內容：各服務的區域與模型，以及「轉錄」分頁的選擇（下次開啟時沿用）。"""
         out = self.transcribe.output.path()
         default_out = app_config.output_dir({})
-        return {
-            "general": {"output_dir": "" if out is None or out == default_out else str(out)},
-            "stt": {**self.keys.updates(), "default_engine": self.transcribe.selected_engines()[0]},
-            "ui": {"last_languages": self.transcribe.languages.codes()},
-        }
+        updates = self.keys.updates()
+        updates["stt"]["default_engine"] = self.transcribe.selected_engines()[0]
+        updates["general"] = {"output_dir": "" if out is None or out == default_out else str(out)}
+        updates["ui"] = {"last_languages": self.transcribe.languages.codes()}
+        return updates
 
     def _open_config(self) -> None:
         path = app_config.init_user_config()

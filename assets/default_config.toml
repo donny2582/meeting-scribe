@@ -67,12 +67,9 @@ whisper_model = "large-v3"
 diarization_model = "pyannote/speaker-diarization-3.1"
 
 [llm]
-provider = "anthropic"
-# 臺灣繁體在地化：設定 Anthropic 金鑰後，Soniox 等引擎的中文會在轉錄完成時立即校潤
-localize_model = "claude-opus-5-5"
-localize_effort = "low"         # 只改字形與用語，不需要深度推理；可改 medium／high
+# 文字整理處理：臺灣繁體在地化（Soniox 轉錄完成時立即執行），之後也用於會議紀錄摘要
+provider = "anthropic"          # anthropic 或 openai
 localize_batch_chars = 3000     # 每批送出的中文字數
-server_side_fallback = true     # 主要模型拒絕處理時，自動改用備援模型完成請求
 max_retries = 3
 timeout_sec = 600
 summary_model = ""        # 第 2 階段設定
@@ -80,6 +77,16 @@ translate_model = ""
 filler_model = ""
 # 註：目前的 Claude 模型不接受 temperature 參數（SPEC 7.5 的低溫度改以 effort 控制）
 max_chars_single_pass = 60000
+
+[llm.anthropic]
+model = "claude-opus-5-5"
+effort = "low"                  # 只改字形與用語，不需要深度推理；可改 medium／high
+server_side_fallback = true     # 主要模型拒絕處理時，自動改用備援模型完成請求
+
+[llm.openai]
+base_url = "https://api.openai.com/v1"
+model = "gpt-6.2-sol"           # 2026-11 官方「日常工作」主力模型；改版時在「API 金鑰」分頁修改
+reasoning_effort = "low"
 
 [benchmark]
 cer_threshold = 0.15
