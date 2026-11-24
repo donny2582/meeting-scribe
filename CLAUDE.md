@@ -34,6 +34,10 @@
 - 第 3 階段（輸出渲染）：程式完成（render/docx_minutes.py、mindmap_png.py、mindmap_xmind.py；tasks.render_outputs）。
   版面依參考文件量測（標題 18pt、壹～陸 16pt／行高 28、內文 14pt／行高 24、一、左2.0凸1.0、(一) 左3.0凸0.85）。
   已用 Word 16 開啟驗證（無錯誤、註解正常）；XMind 檔尚待使用者以 XMind 開啟確認。
+- 第 5 階段（打包）：scripts/build.ps1（PyInstaller onedir＋Inno Setup，安裝檔 dist\installer\MeetingScribe_Setup_{版本}.exe，約 122 MB）。
+  打包版有 `selftest` 子指令（不需金鑰，本機完成一次處理）；本機已驗證靜默安裝 → 無 Python 的 PATH 下自我檢查全部通過 → 解除安裝。
+  真正乾淨的 Windows（Windows 沙箱，scripts/test_clean_install.ps1）尚待使用者啟用沙箱後執行。程式圖示＝assets/icon.png。
+  GitHub：github.com/donny2582/meeting-scribe（公開）。
 - 第 0 階段（引擎評估）：程式已完成，待使用者以真實錄音執行評估並選定預設引擎。
 - 使用者要求提前建立整合式主視窗（分頁：轉錄、引擎評估、詞庫、API 金鑰）。
   使用者不要重複的設定頁：引擎、語言、輸出資料夾只在「轉錄」分頁選並記住上次選擇；
