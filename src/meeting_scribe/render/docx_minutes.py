@@ -18,12 +18,12 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from docx import Document
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_COLOR_INDEX, WD_LINE_SPACING
 from docx.shared import Cm, Pt
 
 from meeting_scribe.models import Summary, SummaryItem
+from meeting_scribe.render.docx_common import new_document
 from meeting_scribe.render.docx_transcript import _set_font, available_path, output_filename
 from meeting_scribe.render.minutes_text import cn_number
 from meeting_scribe.render.roc_date import format_roc_date, format_roc_time, parse_hhmm
@@ -63,13 +63,13 @@ class MinutesWriter:
 
     def __init__(self, template: Path | None = None, trace_comments: bool = True) -> None:
         if template and template.is_file():
-            self.d = Document(str(template))
+            self.d = new_document(template)
             body = self.d.element.body
             for child in list(body):
                 if not child.tag.endswith("sectPr"):
                     body.remove(child)
         else:
-            self.d = Document()
+            self.d = new_document()
         self.trace = trace_comments
         sec = self.d.sections[0]
         sec.page_height, sec.page_width = Cm(29.7), Cm(21.0)

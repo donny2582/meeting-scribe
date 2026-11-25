@@ -13,11 +13,11 @@ from collections.abc import Callable
 from datetime import date, datetime
 from pathlib import Path
 
-from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt
 
+from meeting_scribe.render.docx_common import CJK_FONT, LATIN_FONT, new_document
 from meeting_scribe.render.roc_date import (
     format_roc_date,
     format_roc_datetime,
@@ -27,8 +27,6 @@ from meeting_scribe.render.roc_date import (
 )
 from meeting_scribe.transcript_io import TranscriptDocument
 
-CJK_FONT = "標楷體"
-LATIN_FONT = "Times New Roman"
 MERGE_GAP_SEC = 2.0
 _BAD_CHARS = re.compile(r'[\\/:*?"<>|\r\n\t]')
 
@@ -48,6 +46,7 @@ def _set_font(run, size: float, bold: bool = False) -> None:  # type: ignore[no-
         fonts = rpr.makeelement(qn("w:rFonts"), {})
         rpr.append(fonts)
     fonts.set(qn("w:eastAsia"), CJK_FONT)
+    fonts.set(qn("w:hint"), "eastAsia")
     fonts.set(qn("w:ascii"), LATIN_FONT)
     fonts.set(qn("w:hAnsi"), LATIN_FONT)
 
@@ -122,7 +121,7 @@ def render_transcript(doc: TranscriptDocument, out_dir: Path, now: datetime | No
     info = doc.info
     report(1, "建立逐字稿 .docx：設定版面（A4、標楷體、邊界）")
     meeting_date = date.fromisoformat(info.date)
-    d = Document()
+    d = new_document()
     section = d.sections[0]
     section.page_height, section.page_width = Cm(29.7), Cm(21.0)
     section.top_margin, section.bottom_margin = Cm(2.5), Cm(2.0)
