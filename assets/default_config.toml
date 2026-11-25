@@ -3,7 +3,7 @@
 # 模型名稱與 API 單價一律放在設定檔，不寫死在程式中。
 
 [general]
-output_dir = ""          # 空白＝文件\MeetingScribe\輸出
+output_dir = ""          # 空白＝文件\MeetingScribe\輸出；路徑請用 / 或 \\，例："D:/會議紀錄"
 ffmpeg_path = ""         # 空白＝依序尋找 assets\ffmpeg\ffmpeg.exe、系統 PATH
 keep_trace_comments = true
 log_transcript = false   # 日誌不記錄逐字稿內容（請勿開啟）

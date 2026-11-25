@@ -56,7 +56,9 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.registry = LanguageRegistry.load()
         self.cfg = app_config.load_config()
-        self.setWindowTitle("MeetingScribe 會議紀錄產生器")
+        from meeting_scribe import __version__
+
+        self.setWindowTitle(f"MeetingScribe 會議紀錄產生器 {__version__}")
         self.resize(900, 780)
 
         header = QWidget()
@@ -108,6 +110,8 @@ class MainWindow(QMainWindow):
             ("開啟日誌", "日誌只記錄階段、時間與錯誤，不含逐字稿內容。",
              lambda: open_path(self._ensure(app_config.localappdata_dir() / "logs"))),
             ("建立桌面捷徑", "在桌面建立「MeetingScribe 會議紀錄」捷徑（已有的話會覆蓋）。", self._make_shortcut),
+            ("回報問題", ("把日誌、版本與系統資訊打包成一個 zip 檔，寄給開發者協助排除問題。\n"
+                        "不含錄音、逐字稿與 API 金鑰，也不會自動上傳。"), self._report_problem),
         ]
         for text, tip, fn in tools:
             b = QPushButton(text)
@@ -275,6 +279,11 @@ class MainWindow(QMainWindow):
             return
         QMessageBox.information(self, "建立桌面捷徑", f"已在桌面建立捷徑：\n{link}")
 
+    def _report_problem(self) -> None:
+        from meeting_scribe.gui.error_dialog import show_report_created
+
+        show_report_created(self)
+
     @staticmethod
     def _ensure(path: Any) -> Any:
         path.mkdir(parents=True, exist_ok=True)
@@ -331,9 +340,37 @@ class MainWindow(QMainWindow):
         event.accept()
 
 
+def _config_problem(app: QApplication) -> bool:
+    """啟動前檢查使用者設定檔；格式錯誤時讓使用者選擇修正或改用出廠設定。回傳 True 表示可以繼續啟動。"""
+    from meeting_scribe import diagnostics
+
+    problem = diagnostics.check_user_config()
+    if problem is None:
+        return True
+    box = QMessageBox()
+    box.setIcon(QMessageBox.Icon.Warning)
+    box.setWindowTitle("設定檔格式錯誤")
+    box.setText(problem)
+    box.setInformativeText("「備份後用出廠設定啟動」會把這個設定檔改名保存（不會刪除），"
+                           "API 金鑰不受影響；服務、模型、輸出資料夾等設定需要重新選擇。")
+    fix = box.addButton("開啟設定檔修正", QMessageBox.ButtonRole.ActionRole)
+    reset = box.addButton("備份後用出廠設定啟動", QMessageBox.ButtonRole.AcceptRole)
+    box.addButton("結束", QMessageBox.ButtonRole.RejectRole)
+    box.exec()
+    if box.clickedButton() is reset:
+        backup = diagnostics.backup_user_config()
+        QMessageBox.information(None, "已改用出廠設定", f"原本的設定檔已備份為：\n{backup}")
+        return True
+    if box.clickedButton() is fix:
+        open_path(app_config.user_config_path())
+    return False
+
+
 def run_gui() -> int:
-    """啟動圖形介面。"""
+    """啟動圖形介面：先安裝錯誤安全網、檢查設定檔，再開啟主視窗。"""
+    from meeting_scribe import diagnostics
     from meeting_scribe.cli import setup_logging
+    from meeting_scribe.gui import error_dialog
     from meeting_scribe.gui.icon import make_icon
 
     setup_logging(console=False)
@@ -342,6 +379,20 @@ def run_gui() -> int:
     app.setFont(QFont("Microsoft JhengHei UI", 10))
     app.setStyleSheet(APP_STYLE)
     app.setWindowIcon(make_icon())
-    win = MainWindow()
+    error_dialog.install()
+    if not _config_problem(app):
+        return 1
+    try:
+        win = MainWindow()
+    except Exception as exc:  # noqa: BLE001 - 主視窗建立失敗：記錄並說明，不要無聲結束
+        diagnostics.log_exception(exc, "開啟主視窗")
+        box = QMessageBox(QMessageBox.Icon.Critical, "無法開啟 MeetingScribe", diagnostics.describe(exc))
+        box.setDetailedText(diagnostics.format_error(exc))
+        report = box.addButton("回報問題", QMessageBox.ButtonRole.ActionRole)
+        box.addButton("結束", QMessageBox.ButtonRole.RejectRole)
+        box.exec()
+        if box.clickedButton() is report:
+            error_dialog.show_report_created(None, diagnostics.describe(exc) + "\n\n" + diagnostics.format_error(exc))
+        return 1
     win.show()
     return int(app.exec())

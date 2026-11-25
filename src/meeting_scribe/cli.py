@@ -23,7 +23,6 @@ from meeting_scribe.config import (
     get_secret,
     init_user_config,
     load_config,
-    localappdata_dir,
     mask_secret,
     set_secret,
 )
@@ -36,22 +35,10 @@ log = logging.getLogger("meeting_scribe")
 
 
 def setup_logging(verbose: bool = False, console: bool = True) -> Path:
-    """日誌寫入 %LOCALAPPDATA%\\MeetingScribe\\logs（不記錄逐字稿內容）。"""
-    log_dir = localappdata_dir() / "logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    path = log_dir / "meeting_scribe.log"
-    fh = logging.FileHandler(path, encoding="utf-8")
-    fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
-    handlers: list[logging.Handler] = [fh]
-    if console and sys.stderr is not None:
-        ch = logging.StreamHandler()
-        ch.setFormatter(logging.Formatter("%(message)s"))
-        handlers.append(ch)
-    root = logging.getLogger()
-    root.handlers[:] = handlers
-    root.setLevel(logging.DEBUG if verbose else logging.INFO)
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    return path
+    """日誌寫入 %LOCALAPPDATA%\\MeetingScribe\\logs（自動輪替、不記錄逐字稿內容），見 diagnostics。"""
+    from meeting_scribe import diagnostics
+
+    return diagnostics.setup_logging(verbose, console)
 
 
 def _print_progress(pct: float, msg: str) -> None:

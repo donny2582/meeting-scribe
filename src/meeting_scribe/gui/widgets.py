@@ -322,7 +322,10 @@ class RunPanel(QWidget):
             except Cancelled:
                 self.signals.cancelled.emit()
             except Exception as exc:  # noqa: BLE001 - 所有錯誤都要顯示給使用者
-                self.signals.failed.emit(str(exc) or type(exc).__name__)
+                from meeting_scribe import diagnostics
+
+                diagnostics.log_exception(exc, title)  # 未預期的錯誤記下完整位置，方便回報
+                self.signals.failed.emit(diagnostics.describe(exc))
             else:
                 self.signals.succeeded.emit(result)
 
