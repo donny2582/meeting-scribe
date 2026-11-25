@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "meeting-scribe"
-version = "0.5.1"
+version = "0.5.2"
 description = "會議紀錄產生器（MeetingScribe）"
 requires-python = ">=3.11"
 
