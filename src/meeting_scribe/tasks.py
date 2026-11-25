@@ -475,6 +475,8 @@ def run_benchmark(
     reference（標準答案）不存在或為 None 時做「快速比較」：不算正確率，只比較處理時間、費用、講者數、
     詞庫詞彙與引擎之間的差異。一律產生逐段對照表 engines_side_by_side.csv 供人工比對。
     """
+    import shutil
+
     from meeting_scribe.audio.preprocess import AudioError
     from meeting_scribe.benchmark import evaluate, load_reference, render_report, write_side_by_side
     from meeting_scribe.stt.base import SttError
@@ -498,15 +500,23 @@ def run_benchmark(
             if progress:
                 progress((i + pct / 100) / len(engines) * 100, f"[{name}] {msg}")
 
+        def run_dir(kind: str, name: str = name) -> Path:
+            """每個錄音、每個引擎各用一個暫存資料夾（音訊與切段結果不可共用），重新評估前清空。"""
+            d = work / f"{kind}_{name}"
+            if not reuse:
+                shutil.rmtree(d, ignore_errors=True)
+            return d
+
         try:
             common = {"engine_name": name, "glossaries": glossaries, "cfg": cfg, "registry": registry,
-                          "work_dir": work, "cancel": cancel, "use_cache": False}  # 評估要重新量測處理時間
+                      "cancel": cancel, "use_cache": False}  # 評估要重新量測處理時間
             result = load_or_transcribe(work / f"{audio.stem}_{name}.json", reuse, sub,
-                                        audio=audio, langs=langs, **common)
+                                        audio=audio, langs=langs, work_dir=run_dir("main"), **common)
             lang_result = None
             if lang_audio:
                 lang_result = load_or_transcribe(work / f"{lang_audio.stem}_{name}.json", reuse, sub,
-                                                 audio=lang_audio, langs=lang_langs or langs, **common)
+                                                 audio=lang_audio, langs=lang_langs or langs,
+                                                 work_dir=run_dir("lang"), **common)
         except (SttError, AudioError) as exc:
             errors[name] = str(exc)
             log.error("引擎 %s 失敗：%s", name, exc)

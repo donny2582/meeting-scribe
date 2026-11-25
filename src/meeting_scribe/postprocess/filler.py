@@ -171,8 +171,8 @@ def clean_texts(
     for n, batch in enumerate(batches, start=1):
         if all(saved.get(sid, {}).get("src") == text for sid, text in batch):
             for sid, text in batch:
-                out = saved[sid]["out"]
-                result[sid] = out if _accept(out, text) else rule_out[sid]
+                out = saved[sid].get("out")  # None＝AI 沒有回傳這段 → 用規則層
+                result[sid] = out if out is not None and _accept(out, text) else rule_out[sid]
             report.reused_batches += 1
             continue
         if progress:
@@ -196,8 +196,7 @@ def clean_texts(
                 result[sid] = out
             else:
                 report.ai_rejected += 1  # 沒回傳或改寫了內容 → 用規則層
-            if out is not None:
-                saved[sid] = {"src": text, "out": out}
+            saved[sid] = {"src": text, "out": out}  # 沒回傳的也記下，這一批下次直接沿用，不重複計費
         report.ai_batches += 1
         if checkpoint_file:
             checkpoint_file.parent.mkdir(parents=True, exist_ok=True)

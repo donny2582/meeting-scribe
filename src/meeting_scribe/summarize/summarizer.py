@@ -30,6 +30,7 @@ log = logging.getLogger(__name__)
 PROMPT_DIR = Path(__file__).parent / "prompts"
 PROMPT_VERSION = "2026-11-24"  # 提示詞改版時更新，讓舊的暫存結果失效
 CHUNK_SEC = 20 * 60
+PROMPT_FIELDS = ("title", "chair", "agenda")  # user_prompt 會送給 AI 的會議資訊欄位
 ProgressFn = Callable[[float, str], None]
 
 
@@ -138,15 +139,20 @@ def summarize(
     max_tokens = int(llm_cfg.get("summary_max_tokens", 32000))
     model = llm.model_for("summary")
     system = system_prompt(meeting_type, reference)
-    base_key = [PROMPT_VERSION, model, meeting_type, info, speakers, reference]
+    # 快取條件只包含送給 AI 的內容（user_prompt 用到的會議名稱、主席、議程）：改地點、散會時間、
+    # 勾選產出項目等不影響 AI 結果的欄位時，沿用先前的結果，不重複計費。
+    prompt_info = {k: info.get(k) for k in PROMPT_FIELDS}
+    base_key = [PROMPT_VERSION, model, meeting_type, prompt_info, speakers, reference]
+    legacy_key = [PROMPT_VERSION, model, meeting_type, info, speakers, reference]  # 舊版存的結果也能沿用
 
     def report(pct: float, msg: str) -> None:
         if progress:
             progress(pct, msg)
 
     final_path = checkpoint_dir / f"summary_{meeting_type}.json" if checkpoint_dir else None
-    final_key = _key(base_key, [line.text for line in lines])
-    if final_path and (cached := _load(final_path, final_key)):
+    texts = [line.text for line in lines]
+    final_key = _key(base_key, texts)
+    if final_path and (cached := _load(final_path, final_key) or _load(final_path, _key(legacy_key, texts))):
         report(100, "沿用先前已完成的 AI 整理結果（內容、會議類型、模型都沒變，不重複計費）")
         return cached
 
@@ -165,8 +171,9 @@ def summarize(
         parts: list[Summary] = []
         for n, chunk in enumerate(chunks, start=1):
             path = checkpoint_dir / f"summary_{meeting_type}_part{n:02d}.json" if checkpoint_dir else None
-            key = _key(base_key, n, [line.text for line in chunk])
-            if path and (cached := _load(path, key)):
+            chunk_texts = [line.text for line in chunk]
+            key = _key(base_key, n, chunk_texts)
+            if path and (cached := _load(path, key) or _load(path, _key(legacy_key, n, chunk_texts))):
                 report(100 * n / (len(chunks) + 1), f"沿用已完成的第 {n}/{len(chunks)} 段整理（不重複計費）")
                 parts.append(cached)
                 continue

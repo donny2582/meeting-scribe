@@ -45,6 +45,10 @@ class _JobFailed(SttError):
     """Soniox 伺服器回報這個轉錄工作失敗（無法續跑）。"""
 
 
+class _JobGone(SttError):
+    """Soniox 伺服器上已經沒有這個轉錄工作（HTTP 404，例如超過保存期限被刪除），需要重新送出。"""
+
+
 def tokens_to_segments(
     tokens: list[dict[str, Any]], max_gap_sec: float = 1.0, soft_max_sec: float = 15.0
 ) -> list[RawSegment]:
@@ -176,7 +180,12 @@ class SonioxSttEngine(SttEngine):
         deadline = time.monotonic() + float(self.engine_cfg.get("max_wait_sec", 7200))
         labels = {"queued": "排隊中", "processing": "辨識中"}
         while True:
-            data = self._request("GET", f"/transcriptions/{tid}", key, "查詢狀態").json()
+            try:
+                data = self._request("GET", f"/transcriptions/{tid}", key, "查詢狀態").json()
+            except SttError as exc:
+                if "HTTP 404" in str(exc):
+                    raise _JobGone(str(exc)) from exc
+                raise  # 網路中斷、逾時等：工作可能還在伺服器上，保留工作紀錄，下次再取回
             status = data.get("status")
             if status == "completed":
                 return
@@ -220,9 +229,7 @@ class SonioxSttEngine(SttEngine):
                 report(5, "找到先前送出的 Soniox 工作，確認是否已完成（不重新上傳）…")
                 try:
                     self._wait(tid, key, report)
-                except _JobFailed:
-                    raise
-                except SttError:  # 工作已不存在（例如超過 30 天被刪除）→ 重新送出
+                except _JobGone:  # 只有伺服器確認工作已不存在時才重新送出；連線失敗不可重送（會重複計費）
                     log.info("先前的 Soniox 工作已不存在，重新送出")
                     tid = file_id = None
                     if job_file:

@@ -86,6 +86,7 @@ class AnthropicLLM(LLMClient):
         except anthropic.APIConnectionError as exc:
             raise LLMError("無法連線到 Anthropic，請檢查網路", fatal=True) from exc
 
+        self._record(response, task)  # 只要有回應就已計費：先記錄用量，再檢查內容能不能用
         if response.stop_reason == "refusal":
             category = getattr(getattr(response, "stop_details", None), "category", None)
             raise LLMError(f"模型拒絕處理這段內容（{category or '未說明原因'}）")
@@ -96,7 +97,6 @@ class AnthropicLLM(LLMClient):
             data = json.loads(text)
         except json.JSONDecodeError as exc:
             raise LLMError("模型回傳的內容不是有效的 JSON") from exc
-        self._record(response, task)
         return data
 
     @staticmethod

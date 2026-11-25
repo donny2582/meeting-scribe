@@ -282,7 +282,7 @@ def import_transcript(path: Path, folder: Path) -> TranscriptDocument:
             doc.source = f"匯入：{path.name}"
             return doc
         if suffix == ".srt":
-            segments, timed = parse_srt(path.read_text(encoding="utf-8-sig")), True
+            segments, timed = parse_srt(_read_text(path)), True  # 與 txt 相同：UTF-8，再試 Big5
         elif suffix == ".docx":
             import docx
 

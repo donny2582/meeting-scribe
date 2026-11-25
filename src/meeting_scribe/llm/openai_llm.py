@@ -76,6 +76,12 @@ class OpenAILLM(LLMClient):
             raise LLMError(f"OpenAI 回應錯誤（HTTP {resp.status_code}）：{resp.text[:300]}", fatal=True)
 
         data = resp.json()
+        from meeting_scribe import usage as usage_log
+
+        used = data.get("usage") or {}  # 只要有回應就已計費：先記錄用量，再檢查內容能不能用
+        tokens_in, tokens_out = int(used.get("prompt_tokens") or 0), int(used.get("completion_tokens") or 0)
+        log.info("OpenAI %s：輸入 %s、輸出 %s tokens", data.get("model", model), tokens_in, tokens_out)
+        usage_log.record_llm("OpenAI", model, task, tokens_in, tokens_out)
         choice = (data.get("choices") or [{}])[0]
         message = choice.get("message") or {}
         if message.get("refusal"):
@@ -88,10 +94,4 @@ class OpenAILLM(LLMClient):
             result = json.loads(message.get("content") or "")
         except json.JSONDecodeError as exc:
             raise LLMError("模型回傳的內容不是有效的 JSON") from exc
-        from meeting_scribe import usage as usage_log
-
-        used = data.get("usage") or {}
-        tokens_in, tokens_out = int(used.get("prompt_tokens") or 0), int(used.get("completion_tokens") or 0)
-        log.info("OpenAI %s：輸入 %s、輸出 %s tokens", data.get("model", model), tokens_in, tokens_out)
-        usage_log.record_llm("OpenAI", model, task, tokens_in, tokens_out)
         return result
