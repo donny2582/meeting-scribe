@@ -23,7 +23,7 @@ from meeting_scribe.models_catalog import FetchError, fetch_models, options
 
 def test_catalog_tasks_and_recommendations() -> None:
     task_list = models_catalog.tasks()
-    assert [t.code for t in task_list] == ["localize", "filler", "translate", "summary"]
+    assert [t.code for t in task_list] == ["localize", "filler", "correct", "translate", "summary"]
     by_code = {t.code: t for t in task_list}
     assert by_code["filler"].recommend == {"anthropic": "claude-haiku-5-5", "openai": "gpt-6-luna"}
     assert by_code["translate"].recommend["anthropic"] == "claude-sonnet-5-5"

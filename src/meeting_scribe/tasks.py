@@ -220,6 +220,59 @@ def clean_fillers(
     return out, report
 
 
+def suggest_corrections(
+    doc: Any, cfg: dict[str, Any], progress: ProgressCallback | None = None, cancel: CancelCheck | None = None,
+    want_roles: bool = True,
+) -> Any:
+    """AI 校正建議（語意與講者角色）：只產生建議，由使用者確認後再用 semantic.apply_suggestions 套用。
+
+    - 詞庫「常見誤寫」一律檢查（不花費用）。
+    - 有文字整理服務金鑰且未達費用上限時，再由 AI 做語意校正與講者角色推測；每批存檔，可續跑、不重複計費。
+    """
+    from meeting_scribe import usage
+    from meeting_scribe.llm import LLM_PROVIDERS, LLMError, create_llm, provider_of
+    from meeting_scribe.postprocess.localize import build_reference, load_term_map
+    from meeting_scribe.postprocess.semantic import Suggestions, suggest_fixes, suggest_roles
+
+    report = _guard(progress, cancel)
+    entries = load_glossaries(default_glossaries())
+    info = doc.info.model_dump()
+    speakers = doc.speakers()
+    names = [doc.display_name(s) for s in speakers]
+    lines = [(i, format_hms(s.start) if doc.has_timecodes else "—", doc.display_name(s.speaker), s.text)
+             for i, s in enumerate(doc.segments)]
+    work = Path(doc.folder) / "_work" if doc.folder else None
+    result = Suggestions()
+
+    llm = None
+    label, key_name = LLM_PROVIDERS[provider_of(cfg)]
+    if not get_secret(key_name):
+        result.notes.append(f"未設定 {label} 金鑰：只檢查詞庫的常見誤寫，沒有做 AI 語意校正與講者角色")
+    elif usage.budget_status(cfg).exceeded:
+        result.notes.append("本月費用已達上限：只檢查詞庫的常見誤寫")
+    else:
+        llm = create_llm(cfg)
+        report(0, f"AI 校正：{label} {llm.model_for('correct')}，{len(doc.segments)} 段、{len(speakers)} 位講者")
+    max_chars = int(cfg.get("llm", {}).get("correct_batch_chars", 2500))
+    try:
+        suggest_fixes(lines, info, names, entries, build_reference(load_term_map(), entries), llm, max_chars,
+                      report, work / "semantic.json" if work else None, result)
+        if llm is not None and want_roles:
+            report(90, "AI 推測講者角色")
+            code_lines = [(i, stamp, s.speaker, s.text) for (i, stamp, _n, _t), s in zip(lines, doc.segments,
+                                                                                          strict=True)]
+            suggest_roles(code_lines, info, speakers, set(doc.speaker_names), llm,
+                          checkpoint_file=work / "roles.json" if work else None, result=result)
+    except LLMError as exc:
+        if not (result.fixes or result.roles):
+            raise
+        result.notes.append(f"AI 校正中斷（{exc}）：已完成的部分有存檔，再按一次會從中斷處繼續，不重複計費")
+    report(100, f"AI 校正完成：{len(result.fixes)} 處文字建議、{len(result.roles)} 位講者建議"
+                + (f"（{result.reused} 批沿用先前結果）" if result.reused else "")
+                + (f"；{result.rejected} 筆修改幅度過大已略過" if result.rejected else ""))
+    return result
+
+
 def segment_id(index: int) -> str:
     """片段編號：S0001、S0002…（對應「產出文件」表格的列，從 1 起算）。"""
     return f"S{index + 1:04d}"

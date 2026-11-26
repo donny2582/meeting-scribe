@@ -120,6 +120,7 @@ class DocumentPage(QWidget):
         v = QVBoxLayout(self.transcript_box)
         v.addWidget(hint("按兩下「內容」修正錯字；「講者」可以改成單位名稱（例：公路局），只改這一段。"
                          "要一次改全部，請用「講者命名…」；同一人被拆成兩個講者時用「合併講者…」。"
+                         "產出文件前可以按「AI 校正…」檢查錯字與講者身分（確認後才套用）。"
                          "改錯了可以按「↶ 復原」（Ctrl+Z）回到上一步，或「還原原本內容…」回到轉錄或匯入時的逐字稿。"))
         self.table = QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(["時間碼", "講者", "內容"])
@@ -137,6 +138,13 @@ class DocumentPage(QWidget):
         rename.clicked.connect(self.rename_speaker)
         merge = QPushButton("合併講者…")
         merge.clicked.connect(self.merge_speakers)
+        self.correct_button = QPushButton("AI 校正…")
+        self.correct_button.setToolTip(
+            "產出文件前檢查逐字稿：\n"
+            "・文字：詞庫的常見誤寫，以及 AI 依前後文找出的同音錯字、專有名詞寫錯（例：獨架→毒駕）\n"
+            "・講者角色：AI 依發言內容推測講者身分（例：講者1→主席）\n"
+            "整份跑完後列出建議，由您勾選確認後才套用；套用後可以按「↶ 復原」。")
+        self.correct_button.clicked.connect(self.ai_correct)
         self.count_label = hint("")
         self.undo_button = QPushButton("↶ 復原")
         self.undo_button.clicked.connect(self.undo)
@@ -144,6 +152,7 @@ class DocumentPage(QWidget):
         self.restore_button.clicked.connect(self.restore_original)
         tools.addWidget(rename)
         tools.addWidget(merge)
+        tools.addWidget(self.correct_button)
         tools.addSpacing(16)
         tools.addWidget(self.undo_button)
         tools.addWidget(self.restore_button)
@@ -577,12 +586,60 @@ class DocumentPage(QWidget):
         self.host.statusBar().showMessage(f"已合併 {count} 段", 5000)
         self.panel.append(f"合併講者：{source} 併入 {target}（{count} 段）")
 
+    # ---- AI 校正（語意與講者角色） ----
+    def ai_correct(self) -> None:
+        """整份逐字稿在背景跑完 AI 校正後，開啟確認視窗；使用者勾選的建議才套用。"""
+        if self.doc is None or self.panel.running:
+            return
+        doc = self.doc.model_copy(deep=True)  # 背景處理用當下的內容
+        cfg = self.host.cfg
+
+        def work(progress: Any, cancel: Any) -> Any:
+            from meeting_scribe import tasks
+
+            return tasks.suggest_corrections(doc, cfg, progress, cancel)
+
+        self.panel.start("AI 校正", work, self._corrections_ready)
+
+    def _open_correction_dialog(self, suggestions: Any) -> tuple[list[Any], list[Any]] | None:
+        """顯示確認視窗，回傳勾選的（文字校正, 講者角色）；取消時回傳 None。"""
+        from meeting_scribe.gui.correction_dialog import CorrectionDialog
+
+        dialog = CorrectionDialog(self, self.doc, suggestions)
+        return dialog.chosen() if dialog.exec() == CorrectionDialog.DialogCode.Accepted else None
+
+    def _corrections_ready(self, suggestions: Any) -> None:
+        from meeting_scribe.postprocess.semantic import apply_suggestions
+
+        if self.doc is None:
+            return
+        for note in suggestions.notes:
+            self.panel.append(note)
+        if suggestions.empty():
+            QMessageBox.information(self, "AI 校正", "沒有發現需要校正的地方。"
+                                    + ("\n\n" + "\n".join(suggestions.notes) if suggestions.notes else ""))
+            return
+        chosen = self._open_correction_dialog(suggestions)
+        if chosen is None:
+            self.panel.append("AI 校正：沒有套用任何建議")
+            return
+        fixes, roles = chosen
+        if not fixes and not roles:
+            self.panel.append("AI 校正：沒有勾選任何建議")
+            return
+        self.history.record(self.doc, f"AI 校正（{len(fixes)} 處文字、{len(roles)} 位講者）")
+        applied, named = apply_suggestions(self.doc, fixes, roles)
+        skipped = len(fixes) - applied
+        label = f"{applied} 處文字、{named} 位講者" + (f"（{skipped} 處原文已改過，略過）" if skipped else "")
+        self._after_history_change("已套用 AI 校正", label)
+
     # ---- 復原、還原原本內容 ----
     def _update_history_buttons(self) -> None:
         editable = self.doc is not None and not getattr(self, "_busy", False)
         undo = self.history.undo_label
         self.undo_button.setEnabled(editable and undo is not None)
         self.restore_button.setEnabled(editable)
+        self.correct_button.setEnabled(editable)
         self.undo_button.setToolTip(f"復原：{undo}（Ctrl+Z）" if undo else "沒有可以復原的修改")
         self.restore_button.setToolTip("逐字稿內容與講者回到原本（轉錄或匯入時）的樣子；會議資訊不受影響。"
                                        "還原後反悔可以按「↶ 復原」")

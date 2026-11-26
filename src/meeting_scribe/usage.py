@@ -26,7 +26,8 @@ COLUMNS = ["時間", "類別", "服務", "模型", "工作", "音訊秒數", "�
 KIND_STT = "語音轉錄"
 KIND_LLM = "文字整理"
 SERVICE_NAMES = {"azure": "Azure", "openai": "OpenAI", "soniox": "Soniox", "anthropic": "Anthropic"}
-TASK_NAMES = {"localize": "臺灣在地化", "filler": "刪除贅字", "translate": "外語翻譯", "summary": "整理結論"}
+TASK_NAMES = {"localize": "臺灣在地化", "filler": "刪除贅字", "correct": "語意校正與講者角色", "translate": "外語翻譯",
+              "summary": "整理結論"}
 
 _lock = threading.Lock()
 

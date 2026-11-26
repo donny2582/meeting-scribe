@@ -70,6 +70,7 @@ diarization_model = "pyannote/speaker-diarization-3.1"
 # 文字整理處理：臺灣繁體在地化（Soniox 轉錄完成時立即執行），之後也用於會議紀錄摘要
 provider = "anthropic"          # anthropic 或 openai
 localize_batch_chars = 3000     # 每批送出的中文字數
+correct_batch_chars = 2500      # 語意校正每批送出的字數
 max_retries = 3
 timeout_sec = 600
 summary_model = ""        # 第 2 階段設定
@@ -80,19 +81,21 @@ max_chars_single_pass = 60000   # 逐字稿超過此字數時改為每 20 分鐘
 summary_max_tokens = 32000      # 整理會議紀錄的輸出上限（含推理），超過 16000 時自動使用串流
 
 # 各工作使用的模型（可在「API 金鑰」分頁的下拉選單修改；選項與建議見 assets/model_catalog.toml）
-# localize＝臺灣在地化、filler＝刪除贅字、translate＝外語翻譯、summary＝整理討論事項、結論、待辦
+# localize＝臺灣在地化、filler＝刪除贅字、correct＝語意校正與講者角色、translate＝外語翻譯、summary＝整理討論事項、結論、待辦
 [llm.anthropic]
 server_side_fallback = true     # 主要模型拒絕處理時，自動改用備援模型完成請求
 
 [llm.anthropic.models]
 localize = "claude-opus-5-5"
 filler = "claude-haiku-5-5"
+correct = "claude-sonnet-5-5"
 translate = "claude-sonnet-5-5"
 summary = "claude-sonnet-5-5"
 
 [llm.anthropic.effort]          # 推理強度：low／medium／high／xhigh／max
 localize = "low"
 filler = "low"
+correct = "medium"
 translate = "medium"
 summary = "high"
 
@@ -102,12 +105,14 @@ base_url = "https://api.openai.com/v1"
 [llm.openai.models]
 localize = "gpt-6.2-sol"
 filler = "gpt-6-luna"
+correct = "gpt-6.2-sol"
 translate = "gpt-6.2-sol"
 summary = "gpt-6.2-sol"
 
 [llm.openai.reasoning_effort]   # low／medium／high／xhigh
 localize = "low"
 filler = "low"
+correct = "medium"
 translate = "medium"
 summary = "high"
 

@@ -78,15 +78,22 @@ recommend = { anthropic = "claude-haiku-5-5", openai = "gpt-6-luna" }
 reason = "工作單純（只刪不改），但字量最大，用最便宜的模型；子序列驗證會擋掉改錯的地方。"
 cost = "約 0.03"
 
-[tasks.translate]
+[tasks.correct]
 order = 3
+label = "語意校正與講者角色"
+recommend = { anthropic = "claude-sonnet-5-5", openai = "gpt-6.2-sol" }
+reason = "依前後文與詞庫找出語音辨識的同音錯字、專有名詞寫錯，並推測講者身分；需要理解力，用 Sonnet 5.5。結果都要由使用者確認後才套用。"
+cost = "約 0.20–0.50"
+
+[tasks.translate]
+order = 4
 label = "外語翻譯"
 recommend = { anthropic = "claude-sonnet-5-5", openai = "gpt-6.2-sol" }
 reason = "日文敬語、韓文職稱、專業術語需要較好的理解力；外語片段通常不多，用好一點的模型也不貴。"
 cost = "約 0.01–0.05"
 
 [tasks.summary]
-order = 4
+order = 5
 label = "整理討論事項、結論、待辦"
 recommend = { anthropic = "claude-sonnet-5-5", openai = "gpt-6.2-sol" }
 reason = "要讀懂 2 小時的討論、套公文格式、每條附依據片段編號，最需要能力；重要會議可改用 Opus 5.5（品質更好，費用約 2 倍）。"
