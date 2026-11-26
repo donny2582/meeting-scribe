@@ -70,26 +70,6 @@ class TranscriptDocument(BaseModel):
     speaker_names: dict[str, str] = Field(default_factory=dict, description="講者代號 → 使用者命名")
     edited: bool = False
     info: MeetingInfo = Field(default_factory=MeetingInfo)
-    original_segments: list[RawSegment] | None = Field(
-        default=None, description="最初（轉錄或匯入時）的逐字稿，「重新來過」用；舊版存的文件沒有這一項")
-
-    def model_post_init(self, _context: object) -> None:
-        """新建立的文件記下最初的內容（從 document.json 讀入時保留檔案裡的紀錄）。"""
-        if self.original_segments is None and not self.edited and not self.speaker_names:
-            self.original_segments = list(self.segments)
-
-    # ---- 重新來過 ----
-    def has_original(self) -> bool:
-        return self.original_segments is not None
-
-    def reset_to_original(self) -> bool:
-        """逐字稿內容與講者還原成最初的樣子（會議資訊不變）。沒有最初的紀錄時回傳 False。"""
-        if self.original_segments is None:
-            return False
-        self.segments = list(self.original_segments)
-        self.speaker_names = {}
-        self.edited = False
-        return True
 
     # ---- 講者 ----
     def speakers(self) -> list[str]:

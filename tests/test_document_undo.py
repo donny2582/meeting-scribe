@@ -1,4 +1,4 @@
-"""「產出文件」分頁的復原、重做、重新來過。"""
+"""「產出文件」分頁的復原、重做。"""
 
 import os
 from pathlib import Path
@@ -49,23 +49,6 @@ def test_history_undo_redo_and_new_edit_clears_redo(tmp_path: Path) -> None:
     assert h.redo_label is None
 
 
-def test_original_is_kept_and_saved(tmp_path: Path) -> None:
-    doc = TranscriptDocument(source="t", folder=str(tmp_path), segments=_segments())
-    doc.rename_speaker("講者1", "主席")
-    doc.segments[0] = doc.segments[0].model_copy(update={"text": "改過的內容"})
-    loaded = TranscriptDocument.load(doc.save())
-    assert loaded.has_original() and loaded.original_segments[0].text == "好，我們開始開會。"  # type: ignore[index]
-    assert loaded.reset_to_original()
-    assert _state(loaded) == ([("講者1", "好，我們開始開會。"), ("講者2", "請公路局說明進度。"), ("講者3", "公路局報告。")], {})
-
-
-def test_old_document_without_original(tmp_path: Path) -> None:
-    """舊版存的文件（已修改、沒有最初內容）不會把目前內容誤當成最初的逐字稿。"""
-    doc = TranscriptDocument.model_validate({"source": "t", "segments": [s.model_dump() for s in _segments()],
-                                             "speaker_names": {"講者1": "主席"}, "edited": True})
-    assert not doc.has_original() and not doc.reset_to_original()
-
-
 # ---- 介面 ----
 @pytest.fixture
 def page(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
@@ -96,7 +79,8 @@ def test_undo_redo_reset_in_gui(page: Any) -> None:
     def speakers() -> list[str]:
         return [page.table.item(r, 1).text() for r in range(page.table.rowCount())]
 
-    assert not page.undo_button.isEnabled() and not page.redo_button.isEnabled() and page.reset_button.isEnabled()
+    assert not page.undo_button.isEnabled() and not page.redo_button.isEnabled()
+    assert not hasattr(page, "reset_button")  # 不提供「重新來過」
     _answers(page.monkeypatch, ["講者3", "講者2", "講者1"], ["公路局"])
     page.rename_speaker()  # 講者3 → 公路局
     page.merge_speakers()  # 講者2 併入 講者1（操作錯誤）
@@ -112,12 +96,10 @@ def test_undo_redo_reset_in_gui(page: Any) -> None:
     page.redo()
     assert speakers() == ["講者1", "講者1", "公路局"]
     assert "已重做：合併講者" in page.panel.log.toPlainText()
-
-    page.reset_to_original()  # 重新來過
+    page.undo()
+    page.undo()  # 一路復原到最初
     assert speakers() == ["講者1", "講者2", "講者3"] and page.doc.speaker_names == {}
-    assert page.table.item(0, 2).text() == "好，我們開始開會。"
-    page.undo()  # 反悔：回到重新來過之前
-    assert speakers() == ["講者1", "講者1", "公路局"]
+    assert not page.undo_button.isEnabled()
     assert page.dirty
 
 
