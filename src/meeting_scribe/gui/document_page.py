@@ -647,7 +647,7 @@ class DocumentPage(QWidget):
         """先選擇校正方式：雲端比對，或使用已有的校正檔。取消時回傳 None。"""
         from meeting_scribe.gui.correction_dialog import CorrectionSourceDialog
 
-        dialog = CorrectionSourceDialog(self, self.output_folder())
+        dialog = CorrectionSourceDialog(self, self._review_folder()[0])
         if dialog.exec() != CorrectionSourceDialog.DialogCode.Accepted:
             return None
         return (dialog.mode(), *dialog.paths())
@@ -693,24 +693,46 @@ class DocumentPage(QWidget):
         self._after_history_change("已載入校正檔", f"{corrected.name}：{len(joined)} 列，{changed} 列有變更（淡橘色）、"
                                                 f"{len(unmatched)} 列找不到對應或沒有講者（淡綠色）")
 
+    def _review_folder(self) -> tuple[Path, bool]:
+        """AI 校正 txt 放哪裡：回傳（資料夾, 該資料夾是否已有轉錄產生的逐字稿草稿.txt）。
+
+        從「轉錄」跳轉過來的文件，工作資料夾裡已經有轉錄產生的「逐字稿草稿.txt」，就直接沿用那個資料夾；
+        匯入的逐字稿沒有草稿檔，改用這場會議的輸出資料夾。
+        """
+        from meeting_scribe.postprocess.ai_review import DRAFT_FILE
+
+        if self.doc is not None and self.doc.folder:
+            job = Path(self.doc.folder)
+            if (job / DRAFT_FILE).is_file():
+                return job, True
+        return self.output_folder(), False
+
     def _write_review_files(self, baseline: list[Any]) -> None:
-        """雲端比對後，在這場會議的輸出資料夾寫出「逐字稿草稿.txt」與「逐字稿草稿_AI校正.txt」（之後可以直接比對）。"""
+        """雲端比對後寫出「逐字稿草稿_AI校正.txt」（之後可以直接比對）。
+
+        轉錄來的文件寫在轉錄的工作資料夾（和轉錄產生的逐字稿草稿.txt 放一起，不覆蓋草稿）；
+        匯入的文件寫在這場會議的輸出資料夾，並一併寫出 AI 校正前的「逐字稿草稿.txt」。
+        """
         from meeting_scribe.postprocess import ai_review
 
         assert self.doc is not None
         doc = self.doc
-        folder = self.output_folder()
+        folder, has_draft = self._review_folder()
         title = self.title.toPlainText().strip()
+        written = []
         try:
-            draft = ai_review.write_txt(baseline, folder / ai_review.DRAFT_FILE, title, "逐字稿草稿（AI 校正前）",
-                                        doc.display_name, doc.has_timecodes)
-            corrected = ai_review.write_txt(doc.segments, folder / ai_review.CORRECTED_FILE, title,
-                                            "逐字稿草稿（AI 校正後）", doc.display_name, doc.has_timecodes)
+            if not has_draft:
+                written.append(ai_review.write_txt(baseline, folder / ai_review.DRAFT_FILE, title,
+                                                   "逐字稿草稿（AI 校正前）", doc.display_name, doc.has_timecodes))
+            written.append(ai_review.write_txt(doc.segments, folder / ai_review.CORRECTED_FILE, title,
+                                               "逐字稿草稿（AI 校正後）", doc.display_name, doc.has_timecodes))
         except OSError as exc:
             self.panel.append(f"無法寫出 AI 校正的文字檔：{exc}")
             return
-        self.panel.append(f"已輸出：{draft}")
-        self.panel.append(f"已輸出：{corrected}")
+        for path in written:
+            self.panel.append(f"已輸出：{path}")
+        if has_draft:
+            self.panel.append(f"（和轉錄產生的 {ai_review.DRAFT_FILE} 放在同一個資料夾，之後可以用「已有現成校正檔」直接比對）")
 
     def _open_correction_dialog(self, suggestions: Any) -> tuple[list[Any], list[Any], list[Any], list[Any]] | None:
         """顯示確認視窗，回傳勾選的（文字校正, 講者角色, 合併講者, 改講者）；取消時回傳 None。"""

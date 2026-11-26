@@ -272,8 +272,9 @@ class CorrectionSourceDialog(QDialog):
             group.addButton(rb)
         self.cloud.setChecked(True)
         lay.addWidget(self.cloud)
-        lay.addWidget(hint("跑完後列出建議讓您確認；套用後在表格以淡橘色標記，並在這場會議的資料夾輸出"
-                           f"「{CORRECTED_FILE}」與「{DRAFT_FILE}」。"))
+        lay.addWidget(hint("跑完後列出建議讓您確認；套用後在表格以淡橘色標記，並輸出"
+                           f"「{CORRECTED_FILE}」：從轉錄來的逐字稿放在轉錄的資料夾（和「{DRAFT_FILE}」放一起），"
+                           "匯入的逐字稿放在這場會議的輸出資料夾。"))
         lay.addWidget(self.files)
         self.file_box = QWidget()
         form = QFormLayout(self.file_box)

@@ -187,3 +187,25 @@ def test_source_dialog(page: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatc
     d.corrected.set_path(folder / "逐字稿草稿_AI校正.txt")
     d._accept()
     assert d.result() == 1 and d.mode() == "files"
+
+
+def test_transcribed_document_writes_into_transcription_folder(page: Any, tmp_path: Path) -> None:
+    """從「轉錄」跳轉來的文件：AI 校正檔寫在轉錄的工作資料夾，和轉錄產生的逐字稿草稿.txt 放一起，不覆蓋草稿。"""
+    from meeting_scribe.gui.correction_dialog import CorrectionSourceDialog
+
+    job = Path(page.doc.folder)
+    job.mkdir(parents=True, exist_ok=True)
+    (job / "逐字稿草稿.txt").write_text("辨識引擎：Soniox\n\n" + DRAFT, encoding="utf-8-sig")  # 轉錄時產生的草稿
+    assert page._review_folder() == (job, True)
+    s = Suggestions(fixes=[TextFix(0, page.doc.segments[0].text, "好，我們開始開會，今天討論毒駕防制。", "同音", "AI")])
+    mp = page.monkeypatch
+    mp.setattr(page, "_choose_correction_source", lambda: ("cloud", None, None))
+    mp.setattr(tasks, "suggest_corrections", lambda *a, **k: s)
+    mp.setattr(page, "_open_correction_dialog", lambda x: (x.fixes, [], [], []))
+    page.ai_correct()
+    _wait(page)
+    assert "毒駕" in (job / "逐字稿草稿_AI校正.txt").read_text(encoding="utf-8-sig")
+    assert (job / "逐字稿草稿.txt").read_text(encoding="utf-8-sig").startswith("辨識引擎：Soniox")  # 草稿沒被覆蓋
+    assert not (page.output_folder() / "逐字稿草稿_AI校正.txt").exists()
+    d = CorrectionSourceDialog(page, page._review_folder()[0])  # 「已有現成校正檔」自動帶入同一個資料夾的兩個檔案
+    assert d.paths() == (job / "逐字稿草稿.txt", job / "逐字稿草稿_AI校正.txt")
