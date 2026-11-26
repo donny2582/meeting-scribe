@@ -209,3 +209,14 @@ def test_transcribed_document_writes_into_transcription_folder(page: Any, tmp_pa
     assert not (page.output_folder() / "逐字稿草稿_AI校正.txt").exists()
     d = CorrectionSourceDialog(page, page._review_folder()[0])  # 「已有現成校正檔」自動帶入同一個資料夾的兩個檔案
     assert d.paths() == (job / "逐字稿草稿.txt", job / "逐字稿草稿_AI校正.txt")
+
+def test_open_draft_folder_button(page: Any) -> None:
+    opened: list[Path] = []
+    page.monkeypatch.setattr("meeting_scribe.gui.document_page.open_path", lambda p: opened.append(Path(p)))
+    assert page.draft_folder_button.isEnabled()
+    page.draft_folder_button.click()  # 匯入的逐字稿（沒有轉錄草稿）→ 會議輸出資料夾
+    job = Path(page.doc.folder)
+    job.mkdir(parents=True, exist_ok=True)
+    (job / "逐字稿草稿.txt").write_text(DRAFT, encoding="utf-8")
+    page.draft_folder_button.click()  # 轉錄來的逐字稿 → 轉錄的工作資料夾
+    assert opened == [page.output_folder(), job]

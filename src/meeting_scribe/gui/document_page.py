@@ -150,6 +150,10 @@ class DocumentPage(QWidget):
             "・講者角色：AI 依發言內容推測講者身分（例：講者1→主席）\n"
             "整份跑完後列出建議，由您勾選確認後才套用；套用後可以按「↶ 復原」。")
         self.correct_button.clicked.connect(self.ai_correct)
+        self.draft_folder_button = QPushButton("開啟逐字稿草稿資料夾")
+        self.draft_folder_button.setToolTip("開啟「逐字稿草稿.txt」與「逐字稿草稿_AI校正.txt」所在的資料夾：\n"
+                                            "從轉錄來的逐字稿是轉錄的工作資料夾；匯入的逐字稿是這場會議的輸出資料夾。")
+        self.draft_folder_button.clicked.connect(self._open_draft_folder)
         self.count_label = hint("")
         self.undo_button = QPushButton("↶ 復原")
         self.undo_button.clicked.connect(self.undo)
@@ -161,6 +165,7 @@ class DocumentPage(QWidget):
         tools.addSpacing(16)
         tools.addWidget(self.undo_button)
         tools.addWidget(self.restore_button)
+        tools.addWidget(self.draft_folder_button)
         tools.addStretch(1)
         sc = QShortcut(QKeySequence(QKeySequence.StandardKey.Undo), self.transcript_box, activated=self.undo)
         sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
@@ -707,6 +712,15 @@ class DocumentPage(QWidget):
                 return job, True
         return self.output_folder(), False
 
+    def _open_draft_folder(self) -> None:
+        """開啟逐字稿草稿（與 AI 校正檔）所在的資料夾。"""
+        if self.doc is None:
+            return
+        folder, _has_draft = self._review_folder()
+        folder.mkdir(parents=True, exist_ok=True)
+        open_path(folder)
+        self.host.statusBar().showMessage(f"已開啟：{folder}", 6000)
+
     def _write_review_files(self, baseline: list[Any]) -> None:
         """雲端比對後寫出「逐字稿草稿_AI校正.txt」（之後可以直接比對）。
 
@@ -785,6 +799,7 @@ class DocumentPage(QWidget):
         self.undo_button.setEnabled(editable and undo is not None)
         self.restore_button.setEnabled(editable)
         self.correct_button.setEnabled(editable)
+        self.draft_folder_button.setEnabled(self.doc is not None)
         self.undo_button.setToolTip(f"復原：{undo}（Ctrl+Z）" if undo else "沒有可以復原的修改")
         self.restore_button.setToolTip("逐字稿內容與講者回到原本（轉錄或匯入時）的樣子；會議資訊不受影響。"
                                        "還原後反悔可以按「↶ 復原」")
