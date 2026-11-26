@@ -109,11 +109,34 @@ class VersionPage(QWidget):
         row.addWidget(self.status, 1)
         row.addWidget(self.install_button)
         lay.addLayout(row)
+        debug_row = QHBoxLayout()
+        from meeting_scribe import diagnostics
+
+        self.debug = QCheckBox("除錯模式")
+        self.debug.setChecked(diagnostics.debug_enabled(host.cfg))
+        self.debug.setToolTip("開啟後，日誌會記錄詳細的處理過程（每次 AI 呼叫、轉錄請求、暫存沿用、版本查詢的時間與狀態），"
+                              "仍不含逐字稿內容。\n遇到問題時開啟、重做一次，再按底部的「回報問題」。")
+        self.debug.toggled.connect(self._toggle_debug)
+        debug_row.addWidget(self.debug)
+        debug_row.addWidget(hint("遇到問題時開啟，日誌會記錄更詳細的處理過程（不含逐字稿內容），再按底部的「回報問題」寄給開發者。"), 1)
+        lay.addLayout(debug_row)
         self.panel = RunPanel()
         lay.addWidget(self.panel, 1)
         self.panel.busy_changed.connect(lambda busy: self.refresh_button.setEnabled(not busy))
 
     # ---- 設定 ----
+    def _toggle_debug(self, on: bool) -> None:
+        from meeting_scribe import diagnostics
+        from meeting_scribe.config import load_config, save_user_overrides
+
+        diagnostics.apply_debug(on)
+        try:
+            save_user_overrides({"general": {"debug": on}})
+            self.host.cfg = load_config()
+        except OSError:
+            pass
+        self.host.statusBar().showMessage(f"除錯模式已{'開啟' if on else '關閉'}", 5000)
+
     def _save_option(self, key: str, value: Any) -> None:
         from meeting_scribe.config import load_config, save_user_overrides
 

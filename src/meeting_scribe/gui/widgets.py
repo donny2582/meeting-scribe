@@ -327,6 +327,10 @@ class RunPanel(QWidget):
         self.busy_changed.emit(True)
 
         def run() -> None:
+            import logging
+
+            debug = logging.getLogger("meeting_scribe.gui")
+            debug.debug("工作開始：%s", title)
             try:
                 result = work(self.signals.progress.emit, self._cancel.is_set)
             except Cancelled:
@@ -337,6 +341,7 @@ class RunPanel(QWidget):
                 diagnostics.log_exception(exc, title)  # 未預期的錯誤記下完整位置，方便回報
                 self.signals.failed.emit(diagnostics.describe(exc))
             else:
+                debug.debug("工作完成：%s（%.1f 秒）", title, time.monotonic() - self._started)
                 self.signals.succeeded.emit(result)
 
         threading.Thread(target=run, daemon=True).start()

@@ -58,6 +58,11 @@ class AnthropicLLM(LLMClient):
             "messages": [{"role": "user", "content": user}],
             "output_config": output_config,
         }
+        import time
+
+        t0 = time.perf_counter()
+        log.debug("Anthropic 呼叫開始：工作=%s 模型=%s effort=%s 系統提示 %d 字、內容 %d 字、max_tokens=%d、備援=%s",
+                  task, model, self.efforts.get(task, "—"), len(system), len(user), max_tokens, self.use_fallbacks)
         try:
             stream = max_tokens > 16000  # 輸出很長時用串流，避免 HTTP 逾時
             if self.use_fallbacks:
@@ -86,6 +91,8 @@ class AnthropicLLM(LLMClient):
         except anthropic.APIConnectionError as exc:
             raise LLMError("無法連線到 Anthropic，請檢查網路", fatal=True) from exc
 
+        log.debug("Anthropic 呼叫完成：工作=%s 實際模型=%s %.1f 秒 stop_reason=%s", task, response.model,
+                  time.perf_counter() - t0, response.stop_reason)
         self._record(response, task)  # 只要有回應就已計費：先記錄用量，再檢查內容能不能用
         if response.stop_reason == "refusal":
             category = getattr(getattr(response, "stop_details", None), "category", None)

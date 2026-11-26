@@ -72,6 +72,23 @@ def setup_logging(verbose: bool = False, console: bool = True) -> Path:
     return path
 
 
+# ---- 除錯模式 ----
+def debug_enabled(cfg: dict[str, Any] | None = None) -> bool:
+    """除錯模式：設定 [general] debug = true，或環境變數 MEETINGSCRIBE_DEBUG=1。"""
+    import os
+
+    if os.environ.get("MEETINGSCRIBE_DEBUG", "").strip().lower() in ("1", "true", "yes", "on"):
+        return True
+    return bool((cfg or {}).get("general", {}).get("debug", False))
+
+
+def apply_debug(on: bool) -> None:
+    """立即切換日誌詳細程度（不必重新開啟程式）。"""
+    logging.getLogger().setLevel(logging.DEBUG if on else logging.INFO)
+    logging.getLogger("httpx").setLevel(logging.WARNING)  # 第三方套件的細節不需要
+    log.info("除錯模式：%s", "開啟（日誌會記錄詳細的處理過程，不含逐字稿內容）" if on else "關閉")
+
+
 # ---- 錯誤分類與記錄 ----
 def expected_errors() -> tuple[type[BaseException], ...]:
     """已經有清楚中文說明的錯誤類型（不是程式的 bug）。"""
@@ -184,6 +201,7 @@ def system_info() -> list[str]:
         f"執行檔：{sys.executable}",
         f"Windows：{platform.platform()}",
         f"Python：{platform.python_version()}",
+        f"除錯模式：{'開啟' if logging.getLogger().isEnabledFor(logging.DEBUG) else '關閉'}",
         f"產生時間：{datetime.now():%Y-%m-%d %H:%M:%S}",
     ]
     try:

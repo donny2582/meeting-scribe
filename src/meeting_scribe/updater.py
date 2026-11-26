@@ -103,6 +103,7 @@ def list_releases(cfg: dict[str, Any], include_prerelease: bool = True,
     minimum = parse_version(str(_settings(cfg).get("min_version", "0.5.4")))
     own = client is None
     client = client or _client()
+    log.debug("查詢版本：%s（含預覽版=%s、最低版本=%s）", repo, include_prerelease, ".".join(map(str, minimum)))
     try:
         resp = client.get(f"{API}/repos/{repo}/releases", params={"per_page": 50})
     except httpx.HTTPError as exc:
@@ -140,6 +141,8 @@ def list_releases(cfg: dict[str, Any], include_prerelease: bool = True,
             page_url=str(rel.get("html_url") or releases_page(cfg)),
         ))
     out.sort(key=lambda r: r.key, reverse=True)
+    log.debug("可安裝的版本：%s", "、".join(f"{r.version}{'（預覽版）' if r.prerelease else ''}"
+                                          f"{'' if r.checksum_url else '（沒有檢查碼）'}" for r in out) or "無")
     return out
 
 

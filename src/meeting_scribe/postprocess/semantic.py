@@ -30,6 +30,7 @@ log = logging.getLogger(__name__)
 
 ProgressFn = Callable[[float, str], None]
 TASK = "correct"
+GENERIC_SPEAKER = re.compile(r"^(?:講者|speaker\s*)\d+$", re.IGNORECASE)  # 語音辨識給的代號（還沒命名）
 CONFIDENCE = ("高", "中", "低")
 PROMPT_VERSION = "2026-11-26"
 
@@ -333,6 +334,8 @@ def suggest_fixes(
                 return f"{_sid(item[0])} [{stamp}] {spk}：{item[1]}"
 
             key = _key(PROMPT_VERSION, model, context, reference, [fmt(i) for i in prev[-3:]], [fmt(i) for i in batch])
+            log.debug("語意校正第 %d/%d 批：%d 段、%d 字、%s", n, len(batches), len(batch),
+                      sum(len(t) for _, t in batch), "沿用暫存" if key in saved else "呼叫 AI")
             if key in saved:
                 items = saved[key]
                 result.reused += 1
@@ -392,6 +395,8 @@ def suggest_roles(
 ) -> Suggestions:
     """講者角色與合併建議。lines 的講者欄是講者代號；named＝使用者已命名的講者（不再建議名稱，但仍可建議合併）。"""
     result = result or Suggestions()
+    # 已命名：使用者用「講者命名」改過的，以及代號本身已經是名稱的（例：AI 校正逐列套用的「主席」）
+    named = set(named) | {s for s in speakers if not GENERIC_SPEAKER.match(s)}
     targets = [s for s in speakers if s not in named]
     if not targets and len(speakers) < 2:
         return result

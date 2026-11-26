@@ -380,7 +380,11 @@ def run_gui() -> int:
     from meeting_scribe.gui import error_dialog
     from meeting_scribe.gui.icon import make_icon
 
-    setup_logging(console=False)
+    try:
+        debug = diagnostics.debug_enabled(app_config.load_config())
+    except Exception:  # noqa: BLE001 - 設定檔有錯時稍後會說明，這裡先用一般日誌
+        debug = diagnostics.debug_enabled()
+    setup_logging(verbose=debug, console=False)
     app = QApplication.instance() or QApplication([])
     app.setApplicationName("MeetingScribe")
     app.setFont(QFont("Microsoft JhengHei UI", 10))

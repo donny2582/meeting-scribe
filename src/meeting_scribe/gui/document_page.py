@@ -489,6 +489,25 @@ class DocumentPage(QWidget):
         self.count_label.setText(f"共 {len(self.doc.segments)} 段、{len(speakers)} 位講者")
         self._loading = False
 
+    def _refresh_row(self, row: int) -> None:
+        """只重畫一列（文字、講者、還原講者勾選框、顏色）。"""
+        assert self.doc is not None
+        seg = self.doc.segments[row]
+        self._loading = True
+        self.table.blockSignals(True)
+        stamp = QTableWidgetItem(_hms(seg.start) if self.doc.has_timecodes else "—")
+        stamp.setFlags(stamp.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        name = self.doc.display_name(seg.speaker) + ("（疑似）" if seg.speaker_uncertain else "")
+        speaker_item, text_item = QTableWidgetItem(name), QTableWidgetItem(seg.text)
+        self.table.setItem(row, 0, stamp)
+        self.table.setItem(row, 1, speaker_item)
+        self.table.setItem(row, 2, text_item)
+        self.table.setItem(row, 3, self._restore_item(row))
+        self._paint_row(row, stamp, speaker_item, text_item)
+        self.table.blockSignals(False)
+        self.table.resizeRowToContents(row)
+        self._loading = False
+
     def _restore_item(self, row: int) -> QTableWidgetItem:
         """「還原講者」勾選框：只有 AI 改過講者的列可以勾。"""
         from meeting_scribe.postprocess import ai_review
@@ -582,15 +601,18 @@ class DocumentPage(QWidget):
             return
         text = item.text().strip()
         stamp = _hms(seg.start) if self.doc.has_timecodes else f"第 {row + 1} 段"
-        if col == 2 and text != seg.text:
+        if col == 2:
+            if text == seg.text:
+                return
             self.history.record(self.doc, f"修改 {stamp} 的內容")
             self.doc.segments[row] = seg.model_copy(update={"text": text})
             self.doc.mark_manual(row, 2)
-            self._fill_table()
+            self._refresh_row(row)  # 只更新這一列（大型會議重畫整張表會卡）
         elif col == 1:
             name = text.removesuffix("（疑似）").strip()
             speaker = self._speaker_from_name(name) if name else seg.speaker
             if speaker == seg.speaker:
+                self._refresh_row(row)  # 清空或沒改：畫面回到原本的講者
                 return
             self.history.record(self.doc, f"把 {stamp} 的講者改成「{name}」")  # 改單一片段的講者
             self.doc.segments[row] = seg.model_copy(update={"speaker": speaker, "speaker_uncertain": False})
@@ -695,12 +717,14 @@ class DocumentPage(QWidget):
 
         assert self.doc is not None
         try:
-            base, joined, unmatched = ai_review.load_files(draft, corrected, Path(self.doc.folder) / "_work" / "review")
+            loaded = ai_review.load_files(draft, corrected, Path(self.doc.folder) / "_work" / "review")
         except ImportError_ as exc:
             QMessageBox.warning(self, "AI 校正", str(exc))
             return
         self.history.record(self.doc, f"載入校正檔：{corrected.name}")
+        base, joined, unmatched = loaded.base, loaded.joined, loaded.unmatched
         self.doc.segments = list(joined)
+        self.doc.has_timecodes = loaded.timed  # 時間碼以逐字稿草稿為準
         self.doc.speaker_names = {}
         self.doc.ai_review = None
         self.doc.manual_cells = []  # 表格換成對齊後的內容，原本的手動修改標記不再對應

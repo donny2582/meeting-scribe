@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -62,15 +63,24 @@ def align(base: list[RawSegment], corrected: list[RawSegment], timed: bool = Tru
     return joined, unmatched
 
 
+@dataclass
+class LoadedReview:
+    """讀取校正檔的結果。"""
+
+    base: list[RawSegment]  # 逐字稿草稿（比對基準）
+    joined: list[RawSegment]  # 以草稿為主對齊後的結果
+    unmatched: list[int]  # 找不到對應或沒有講者的列（淡黃色）
+    timed: bool  # 草稿有沒有時間碼（表格依此顯示時間碼）
+
+
 def load_files(draft: Path, corrected: Path, work: Path,
-               tolerance: float = DEFAULT_TOLERANCE_SEC) -> tuple[list[RawSegment], list[RawSegment], list[int]]:
-    """讀取逐字稿草稿與校正檔（txt、srt、docx、json 都可以，容錯解析），回傳（基準, 對齊結果, 淡黃色的列）。"""
+               tolerance: float = DEFAULT_TOLERANCE_SEC) -> LoadedReview:
+    """讀取逐字稿草稿與校正檔（txt、srt、docx、json 都可以，容錯解析），以草稿為主對齊。"""
     base_doc = import_transcript(draft, work / "base")
     corr_doc = import_transcript(corrected, work / "corrected")
     timed = base_doc.has_timecodes and corr_doc.has_timecodes
     joined, unmatched = align(base_doc.segments, corr_doc.segments, timed, tolerance)
-    return base_doc.segments, joined, unmatched
-
+    return LoadedReview(base_doc.segments, joined, unmatched, base_doc.has_timecodes)
 
 def start_review(doc: TranscriptDocument, baseline: list[RawSegment], source: str,
                  unmatched: list[int] | None = None) -> None:

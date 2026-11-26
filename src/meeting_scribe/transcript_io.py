@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 from typing import Literal
@@ -157,32 +158,52 @@ class TranscriptDocument(BaseModel):
         return doc
 
 
+def _copy_review(review: AiReview | None) -> AiReview | None:
+    """比對狀態的複本：基準與片段本身不會被原地修改，只複製清單（不整份深層複製，避免大量會議吃掉記憶體）。"""
+    if review is None:
+        return None
+    return review.model_copy(update={
+        "baseline": list(review.baseline), "corrected_speakers": list(review.corrected_speakers),
+        "unmatched": list(review.unmatched), "restored": list(review.restored),
+    })
+
+
+@dataclass
+class _Snapshot:
+    """復原用的文件狀態。"""
+
+    label: str
+    segments: list[RawSegment]
+    speaker_names: dict[str, str]
+    ai_review: AiReview | None
+    manual_cells: list[tuple[int, int]]
+    has_timecodes: bool
+
+
 class EditHistory:
     """逐字稿編輯的復原（只在這次開啟期間有效，不存檔）。
 
-    每次修改前呼叫 ``record(文件, 動作說明)`` 記下修改前的逐字稿片段與講者命名；
+    每次修改前呼叫 ``record(文件, 動作說明)`` 記下修改前的狀態（片段、講者命名、AI 校正比對、手動修改標記、時間碼）；
     片段本身不會被原地修改（都用 model_copy 換成新物件），所以只需複製清單，很省記憶體。
     """
 
     LIMIT = 200
 
     def __init__(self) -> None:
-        self._undo: list[tuple[str, list[RawSegment], dict[str, str], AiReview | None, list[tuple[int, int]]]] = []
+        self._undo: list[_Snapshot] = []
 
     @staticmethod
-    def _snapshot(doc: TranscriptDocument, label: str) -> tuple[str, list[RawSegment], dict[str, str],
-                                                                 AiReview | None, list[tuple[int, int]]]:
-        review = doc.ai_review.model_copy(deep=True) if doc.ai_review else None
-        return label, list(doc.segments), dict(doc.speaker_names), review, list(doc.manual_cells)
+    def _snapshot(doc: TranscriptDocument, label: str) -> _Snapshot:
+        return _Snapshot(label, list(doc.segments), dict(doc.speaker_names), _copy_review(doc.ai_review),
+                         list(doc.manual_cells), doc.has_timecodes)
 
     @staticmethod
-    def _apply(doc: TranscriptDocument,
-               state: tuple[str, list[RawSegment], dict[str, str], AiReview | None, list[tuple[int, int]]]) -> None:
-        _label, segments, names, review, manual = state
-        doc.segments = list(segments)
-        doc.speaker_names = dict(names)
-        doc.ai_review = review.model_copy(deep=True) if review else None
-        doc.manual_cells = list(manual)
+    def _apply(doc: TranscriptDocument, state: _Snapshot) -> None:
+        doc.segments = list(state.segments)
+        doc.speaker_names = dict(state.speaker_names)
+        doc.ai_review = _copy_review(state.ai_review)
+        doc.manual_cells = list(state.manual_cells)
+        doc.has_timecodes = state.has_timecodes
         doc.edited = True
 
     def record(self, doc: TranscriptDocument, label: str) -> None:
@@ -196,15 +217,14 @@ class EditHistory:
             return None
         state = self._undo.pop()
         self._apply(doc, state)
-        return state[0]
+        return state.label
 
     def clear(self) -> None:
         self._undo.clear()
 
     @property
     def undo_label(self) -> str | None:
-        return self._undo[-1][0] if self._undo else None
-
+        return self._undo[-1].label if self._undo else None
 
 def from_stt_result(result: SttResult, folder: Path, audio: Path | None = None) -> TranscriptDocument:
     """由轉錄結果建立文件；資料夾裡已有修改過的 document.json 時沿用。"""

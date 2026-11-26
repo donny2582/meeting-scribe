@@ -105,6 +105,8 @@ def transcribe_audio(
     base.mkdir(parents=True, exist_ok=True)
     run.mkdir(parents=True, exist_ok=True)
     flac = base / "audio.flac"
+    log.debug("轉錄暫存：音訊 %s（%s）、結果 %s（%s）", base, "已有" if flac.exists() else "沒有",
+              run, "已有轉錄結果" if (run / "stt_result.json").exists() else "需要轉錄")
     if not flac.exists():
         span = f"（{format_hms(clip[0])}–{format_hms(clip[1])}）" if clip else ""
         report(0, f"音訊前處理中：{audio.name}{span}")

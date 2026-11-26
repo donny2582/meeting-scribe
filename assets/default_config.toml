@@ -7,6 +7,7 @@ output_dir = ""          # 空白＝文件\MeetingScribe\輸出；路徑請用 /
 ffmpeg_path = ""         # 空白＝依序尋找 assets\ffmpeg\ffmpeg.exe、系統 PATH
 keep_trace_comments = true
 log_transcript = false   # 日誌不記錄逐字稿內容（請勿開啟）
+debug = false            # 除錯模式：日誌記錄詳細的處理過程（仍不含逐字稿內容），可在「版本」分頁切換
 
 [languages]
 default = ["zh", "en"]   # 預設會議語言：中文＋英文

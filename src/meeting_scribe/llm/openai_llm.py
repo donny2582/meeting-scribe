@@ -62,6 +62,11 @@ class OpenAILLM(LLMClient):
                               headers={"Authorization": f"Bearer {self.key}"},
                               timeout=httpx.Timeout(self.timeout, connect=30.0))
 
+        import time
+
+        t0 = time.perf_counter()
+        log.debug("OpenAI 呼叫開始：工作=%s 模型=%s reasoning_effort=%s 系統提示 %d 字、內容 %d 字、max_tokens=%d",
+                  task, model, self.efforts.get(task, "—"), len(system), len(user), max_tokens)
         try:
             resp = request_with_retry(send, self.retries, what="OpenAI")
         except SttError as exc:
@@ -75,6 +80,7 @@ class OpenAILLM(LLMClient):
         if resp.status_code >= 400:
             raise LLMError(f"OpenAI 回應錯誤（HTTP {resp.status_code}）：{resp.text[:300]}", fatal=True)
 
+        log.debug("OpenAI 回應：HTTP %d、%.1f 秒", resp.status_code, time.perf_counter() - t0)
         data = resp.json()
         from meeting_scribe import usage as usage_log
 

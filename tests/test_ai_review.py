@@ -53,11 +53,10 @@ def test_align_picks_nearest_and_uses_each_row_once() -> None:
 def test_load_files(tmp_path: Path) -> None:
     (tmp_path / "逐字稿草稿.txt").write_text(DRAFT, encoding="utf-8")
     (tmp_path / "逐字稿草稿_AI校正.txt").write_text(CORRECTED, encoding="utf-8")
-    base, joined, unmatched = ai_review.load_files(tmp_path / "逐字稿草稿.txt", tmp_path / "逐字稿草稿_AI校正.txt",
-                                                   tmp_path / "work")
-    assert len(base) == len(joined) == 4
-    assert joined[0].speaker == "主席" and "毒駕" in joined[0].text
-    assert unmatched == [2, 3]
+    loaded = ai_review.load_files(tmp_path / "逐字稿草稿.txt", tmp_path / "逐字稿草稿_AI校正.txt", tmp_path / "work")
+    assert len(loaded.base) == len(loaded.joined) == 4 and loaded.timed
+    assert loaded.joined[0].speaker == "主席" and "毒駕" in loaded.joined[0].text
+    assert loaded.unmatched == [2, 3]
 
 
 # ---- 標記與還原講者 ----

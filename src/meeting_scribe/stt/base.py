@@ -157,12 +157,14 @@ def request_with_retry(
     """以指數退避重試（SPEC 10：網路錯誤重試 3 次）。send 每次都要重新開檔送出。"""
     last_error: Exception | None = None
     for attempt in range(retries + 1):
+        t0 = time.perf_counter()
         try:
             resp = send()
         except httpx.TransportError as exc:
             last_error = exc
             log.warning("%s 網路錯誤（第 %d 次）：%s", what, attempt + 1, type(exc).__name__)
         else:
+            log.debug("%s：HTTP %d、%.1f 秒（第 %d 次）", what, resp.status_code, time.perf_counter() - t0, attempt + 1)
             if resp.status_code not in RETRY_STATUS:
                 return resp
             last_error = SttError(f"HTTP {resp.status_code}")
