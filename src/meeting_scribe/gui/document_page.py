@@ -56,7 +56,8 @@ from meeting_scribe.transcript_io import (
 )
 
 CHANGED_COLOR = QColor("#ffe0b2")  # AI 校正後有變更：淡橘色
-UNMATCHED_COLOR = QColor("#dcedc8")  # 校正檔中找不到對應或沒有講者：淡綠色
+UNMATCHED_COLOR = QColor("#fff9c4")  # 校正檔中找不到對應或沒有講者：淡黃色
+MANUAL_COLOR = QColor("#dcedc8")  # 使用者手動修改的儲存格：淡綠色
 TRANSCRIPT_FILTER = "逐字稿 (*.txt *.srt *.docx *.json);;所有檔案 (*.*)"
 TYPE_HINTS = {
     "topic": "結論依主題歸納，長官裁示獨立成最後一項。",
@@ -123,7 +124,10 @@ class DocumentPage(QWidget):
         v.addWidget(hint("按兩下「內容」修正錯字；「講者」可以改成單位名稱（例：公路局），只改這一段。"
                          "要一次改全部，請用「講者命名…」；同一人被拆成兩個講者時用「合併講者…」。"
                          "產出文件前可以按「AI 校正…」檢查錯字與講者身分（確認後才套用）。"
-                         "改錯了可以按「↶ 復原」（Ctrl+Z）回到上一步，或「還原原本內容…」回到轉錄或匯入時的逐字稿。"))
+                         "改錯了可以按「↶ 復原」（Ctrl+Z）回到上一步，或「還原原本內容…」回到轉錄或匯入時的逐字稿。"
+                         "<br>顏色：<span style='background:#dcedc8'>　手動修改　</span>　"
+                         "<span style='background:#ffe0b2'>　AI 校正修改　</span>　"
+                         "<span style='background:#fff9c4'>　校正檔找不到對應或沒有講者　</span>（只在畫面上提示，不會出現在 Word 檔）"))
         self.table = QTableWidget(0, 4)
         self.table.setHorizontalHeaderLabels(["時間碼", "講者", "內容", "還原講者"])
         self.table.horizontalHeaderItem(3).setToolTip(
@@ -502,25 +506,29 @@ class DocumentPage(QWidget):
         return item
 
     def _paint_row(self, row: int, *items: QTableWidgetItem) -> None:
-        """AI 校正的標記：變更的講者、內容用淡橘色；校正檔找不到對應或沒有講者的整列用淡綠色。"""
+        """標記：AI 變更的講者、內容＝淡橘色；校正檔找不到對應或沒有講者的整列＝淡黃色；
+        使用者手動修改的儲存格＝淡綠色（最優先）。"""
         from meeting_scribe.postprocess import ai_review
 
         assert self.doc is not None
-        review = self.doc.ai_review
-        if review is None:
-            return
         _stamp, speaker, text = items
-        if row in review.unmatched:
-            for it in items:
-                it.setBackground(UNMATCHED_COLOR)
-                it.setToolTip("AI 校正檔中找不到這個時間碼、或那一列沒有講者：保留逐字稿草稿的內容，請自行確認")
-            return
-        if ai_review.speaker_changed(self.doc, row):
-            speaker.setBackground(CHANGED_COLOR)
-            speaker.setToolTip(f"AI 校正：原本是「{self.doc.display_name(review.baseline[row].speaker)}」")
-        if ai_review.text_changed(self.doc, row):
-            text.setBackground(CHANGED_COLOR)
-            text.setToolTip(f"AI 校正前：{review.baseline[row].text}")
+        review = self.doc.ai_review
+        if review is not None:
+            if row in review.unmatched:
+                for it in items:
+                    it.setBackground(UNMATCHED_COLOR)
+                    it.setToolTip("AI 校正檔中找不到這個時間碼、或那一列沒有講者：保留逐字稿草稿的內容，請自行確認")
+            else:
+                if ai_review.speaker_changed(self.doc, row):
+                    speaker.setBackground(CHANGED_COLOR)
+                    speaker.setToolTip(f"AI 校正：原本是「{self.doc.display_name(review.baseline[row].speaker)}」")
+                if ai_review.text_changed(self.doc, row):
+                    text.setBackground(CHANGED_COLOR)
+                    text.setToolTip(f"AI 校正前：{review.baseline[row].text}")
+        for col, item in ((1, speaker), (2, text)):
+            if (row, col) in self.doc.manual_cells:
+                item.setBackground(MANUAL_COLOR)
+                item.setToolTip("手動修改過")
 
     def import_file(self) -> None:
         """匯入已經有的逐字稿檔。"""
@@ -577,6 +585,8 @@ class DocumentPage(QWidget):
         if col == 2 and text != seg.text:
             self.history.record(self.doc, f"修改 {stamp} 的內容")
             self.doc.segments[row] = seg.model_copy(update={"text": text})
+            self.doc.mark_manual(row, 2)
+            self._fill_table()
         elif col == 1:
             name = text.removesuffix("（疑似）").strip()
             speaker = self._speaker_from_name(name) if name else seg.speaker
@@ -584,6 +594,7 @@ class DocumentPage(QWidget):
                 return
             self.history.record(self.doc, f"把 {stamp} 的講者改成「{name}」")  # 改單一片段的講者
             self.doc.segments[row] = seg.model_copy(update={"speaker": speaker, "speaker_uncertain": False})
+            self.doc.mark_manual(row, 1)
             self._fill_table()
         else:
             return
@@ -692,11 +703,12 @@ class DocumentPage(QWidget):
         self.doc.segments = list(joined)
         self.doc.speaker_names = {}
         self.doc.ai_review = None
+        self.doc.manual_cells = []  # 表格換成對齊後的內容，原本的手動修改標記不再對應
         ai_review.start_review(self.doc, base, corrected.name, unmatched)
         changed = sum(1 for i in range(len(joined)) if ai_review.speaker_changed(self.doc, i)
                       or ai_review.text_changed(self.doc, i))
         self._after_history_change("已載入校正檔", f"{corrected.name}：{len(joined)} 列，{changed} 列有變更（淡橘色）、"
-                                                f"{len(unmatched)} 列找不到對應或沒有講者（淡綠色）")
+                                                f"{len(unmatched)} 列找不到對應或沒有講者（淡黃色）")
 
     def _review_folder(self) -> tuple[Path, bool]:
         """AI 校正 txt 放哪裡：回傳（資料夾, 該資料夾是否已有轉錄產生的逐字稿草稿.txt）。

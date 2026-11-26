@@ -3,7 +3,7 @@
 - 雲端比對：AI 校正前的逐字稿就是基準，套用後記下校正後的講者。
 - 已有現成校正檔：以「逐字稿草稿」為主（left join），依時間碼對齊「逐字稿草稿_AI校正」；
   時間碼有容錯（預設 ±2 秒，取最接近、尚未用過的一列）。校正檔裡找不到對應、或該列沒有講者時，
-  保留草稿的內容並標成淡綠色，讓使用者知道要自己檢查。兩邊都沒有時間碼時改為依順序對齊。
+  保留草稿的內容並標成淡黃色，讓使用者知道要自己檢查。兩邊都沒有時間碼時改為依順序對齊。
 """
 
 from __future__ import annotations
@@ -64,7 +64,7 @@ def align(base: list[RawSegment], corrected: list[RawSegment], timed: bool = Tru
 
 def load_files(draft: Path, corrected: Path, work: Path,
                tolerance: float = DEFAULT_TOLERANCE_SEC) -> tuple[list[RawSegment], list[RawSegment], list[int]]:
-    """讀取逐字稿草稿與校正檔（txt、srt、docx、json 都可以，容錯解析），回傳（基準, 對齊結果, 淡綠色的列）。"""
+    """讀取逐字稿草稿與校正檔（txt、srt、docx、json 都可以，容錯解析），回傳（基準, 對齊結果, 淡黃色的列）。"""
     base_doc = import_transcript(draft, work / "base")
     corr_doc = import_transcript(corrected, work / "corrected")
     timed = base_doc.has_timecodes and corr_doc.has_timecodes

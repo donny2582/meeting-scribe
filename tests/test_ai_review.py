@@ -1,4 +1,4 @@
-"""AI 校正的比對：時間碼對齊（容錯）、淡橘／淡綠標記、逐列還原講者、輸出與比對 txt、選擇校正方式。"""
+"""AI 校正的比對：時間碼對齊（容錯）、淡橘／淡黃／淡綠標記、逐列還原講者、輸出與比對 txt、選擇校正方式。"""
 
 import os
 from pathlib import Path
@@ -38,7 +38,7 @@ def test_align_left_join_with_tolerance() -> None:
     joined, unmatched = ai_review.align(base, corr)
     assert [(s.speaker, s.text) for s in joined] == [("主席", "a2"), ("公路局", "b"), ("講者2", "c2"), ("講者3", "d")]
     assert [s.start for s in joined] == [5, 20, 40, 70]  # 以草稿為主，時間碼不變
-    assert unmatched == [2, 3]  # 沒有講者、找不到對應 → 淡綠色
+    assert unmatched == [2, 3]  # 沒有講者、找不到對應 → 淡黃色
 
 
 def test_align_picks_nearest_and_uses_each_row_once() -> None:
@@ -163,7 +163,7 @@ def test_files_correction_left_join_and_green(page: Any, tmp_path: Path) -> None
     page.ai_correct()
     assert [page.table.item(r, 1).text() for r in range(4)] == ["主席", "公路局", "講者2", "講者3"]
     assert _bg(page, 0, 1) == "#ffe0b2" and _bg(page, 0, 2) == "#ffe0b2"
-    assert all(_bg(page, r, c) == "#dcedc8" for r in (2, 3) for c in range(3))  # 找不到對應或沒有講者 → 淡綠色
+    assert all(_bg(page, r, c) == "#fff9c4" for r in (2, 3) for c in range(3))  # 找不到對應或沒有講者 → 淡黃色
     assert "2 列找不到對應或沒有講者" in page.panel.log.toPlainText()
     page.undo()
     assert page.doc.ai_review is None and page.table.item(0, 1).text() == "講者1"
@@ -220,3 +220,26 @@ def test_open_draft_folder_button(page: Any) -> None:
     (job / "逐字稿草稿.txt").write_text(DRAFT, encoding="utf-8")
     page.draft_folder_button.click()  # 轉錄來的逐字稿 → 轉錄的工作資料夾
     assert opened == [page.output_folder(), job]
+
+def test_manual_edits_are_light_green(page: Any, tmp_path: Path) -> None:
+    """手動修改的講者或內容儲存格標淡綠色（優先於 AI 的淡橘色）；復原會一併取消，標記隨文件儲存。"""
+    page.table.item(1, 2).setText("公路局報告，修法預計今年11月完成。")  # 手動改內容
+    assert _bg(page, 1, 2) == "#dcedc8" and _bg(page, 1, 1) != "#dcedc8"  # 只標改過的那一格
+    page.table.item(2, 1).setText("主席")  # 手動改講者
+    assert _bg(page, 2, 1) == "#dcedc8" and _bg(page, 2, 2) != "#dcedc8"
+    assert "手動修改過" in page.table.item(2, 1).toolTip()
+    page.undo()  # 復原講者修改 → 標記也取消
+    assert _bg(page, 2, 1) != "#dcedc8" and _bg(page, 1, 2) == "#dcedc8"
+    loaded = TranscriptDocument.load(page.doc.save())
+    assert loaded.manual_cells == [(1, 2)]
+
+    s = Suggestions(fixes=[TextFix(0, page.doc.segments[0].text, "好，我們開始開會，今天討論毒駕防制。", "同音", "AI")])
+    mp = page.monkeypatch
+    mp.setattr(page, "_choose_correction_source", lambda: ("cloud", None, None))
+    mp.setattr(tasks, "suggest_corrections", lambda *a, **k: s)
+    mp.setattr(page, "_open_correction_dialog", lambda x: (x.fixes, [], [], []))
+    page.ai_correct()
+    _wait(page)
+    assert _bg(page, 0, 2) == "#ffe0b2"  # AI 改的＝淡橘色
+    page.table.item(0, 2).setText("好，我們開始開會，今天討論毒駕防制案。")  # 再手動改 → 淡綠色優先
+    assert _bg(page, 0, 2) == "#dcedc8"

@@ -289,7 +289,7 @@ class CorrectionSourceDialog(QDialog):
         form.addRow("逐字稿草稿：", self.draft)
         form.addRow("AI 校正檔：", self.corrected)
         form.addRow("", hint("以逐字稿草稿為主，依時間碼對齊校正檔（容許 ±2 秒誤差）；"
-                             "校正檔裡找不到對應、或沒有講者的列會標成淡綠色。會以對齊結果取代目前的表格內容（可復原）。"))
+                             "校正檔裡找不到對應、或沒有講者的列會標成淡黃色。會以對齊結果取代目前的表格內容（可復原）。"))
         lay.addWidget(self.file_box)
         self.cloud.toggled.connect(lambda _on: self.file_box.setEnabled(self.files.isChecked()))
         self.file_box.setEnabled(False)
