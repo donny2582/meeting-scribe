@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from PySide6.QtCore import QDate, Qt, QTime
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtGui import QColor, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QButtonGroup,
@@ -55,6 +55,8 @@ from meeting_scribe.transcript_io import (
     import_transcript,
 )
 
+CHANGED_COLOR = QColor("#ffe0b2")  # AI 校正後有變更：淡橘色
+UNMATCHED_COLOR = QColor("#dcedc8")  # 校正檔中找不到對應或沒有講者：淡綠色
 TRANSCRIPT_FILTER = "逐字稿 (*.txt *.srt *.docx *.json);;所有檔案 (*.*)"
 TYPE_HINTS = {
     "topic": "結論依主題歸納，長官裁示獨立成最後一項。",
@@ -122,12 +124,15 @@ class DocumentPage(QWidget):
                          "要一次改全部，請用「講者命名…」；同一人被拆成兩個講者時用「合併講者…」。"
                          "產出文件前可以按「AI 校正…」檢查錯字與講者身分（確認後才套用）。"
                          "改錯了可以按「↶ 復原」（Ctrl+Z）回到上一步，或「還原原本內容…」回到轉錄或匯入時的逐字稿。"))
-        self.table = QTableWidget(0, 3)
-        self.table.setHorizontalHeaderLabels(["時間碼", "講者", "內容"])
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(["時間碼", "講者", "內容", "還原講者"])
+        self.table.horizontalHeaderItem(3).setToolTip(
+            "AI 校正後可以使用：勾選＝這一列的講者回到逐字稿草稿的講者；取消勾選＝回到 AI 校正後的講者")
         header = self.table.horizontalHeader()
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         self.table.verticalHeader().setVisible(False)
         self.table.setWordWrap(True)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -463,14 +468,54 @@ class DocumentPage(QWidget):
             t = QTableWidgetItem(stamp)
             t.setFlags(t.flags() & ~Qt.ItemFlag.ItemIsEditable)
             name = self.doc.display_name(seg.speaker) + ("（疑似）" if seg.speaker_uncertain else "")
+            speaker_item, text_item = QTableWidgetItem(name), QTableWidgetItem(seg.text)
             self.table.setItem(row, 0, t)
-            self.table.setItem(row, 1, QTableWidgetItem(name))
-            self.table.setItem(row, 2, QTableWidgetItem(seg.text))
+            self.table.setItem(row, 1, speaker_item)
+            self.table.setItem(row, 2, text_item)
+            self.table.setItem(row, 3, self._restore_item(row))
+            self._paint_row(row, t, speaker_item, text_item)
         self.table.blockSignals(False)
         self.table.resizeRowsToContents()
         speakers = self.doc.speakers()
         self.count_label.setText(f"共 {len(self.doc.segments)} 段、{len(speakers)} 位講者")
         self._loading = False
+
+    def _restore_item(self, row: int) -> QTableWidgetItem:
+        """「還原講者」勾選框：只有 AI 改過講者的列可以勾。"""
+        from meeting_scribe.postprocess import ai_review
+
+        item = QTableWidgetItem()
+        assert self.doc is not None
+        if ai_review.can_restore(self.doc, row):
+            item.setFlags(Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled)
+            restored = self.doc.ai_review is not None and row in self.doc.ai_review.restored
+            item.setCheckState(Qt.CheckState.Checked if restored else Qt.CheckState.Unchecked)
+            base = self.doc.ai_review.baseline[row].speaker if self.doc.ai_review else ""
+            item.setToolTip(f"勾選：講者回到逐字稿草稿的「{self.doc.display_name(base)}」")
+        else:
+            item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+        return item
+
+    def _paint_row(self, row: int, *items: QTableWidgetItem) -> None:
+        """AI 校正的標記：變更的講者、內容用淡橘色；校正檔找不到對應或沒有講者的整列用淡綠色。"""
+        from meeting_scribe.postprocess import ai_review
+
+        assert self.doc is not None
+        review = self.doc.ai_review
+        if review is None:
+            return
+        _stamp, speaker, text = items
+        if row in review.unmatched:
+            for it in items:
+                it.setBackground(UNMATCHED_COLOR)
+                it.setToolTip("AI 校正檔中找不到這個時間碼、或那一列沒有講者：保留逐字稿草稿的內容，請自行確認")
+            return
+        if ai_review.speaker_changed(self.doc, row):
+            speaker.setBackground(CHANGED_COLOR)
+            speaker.setToolTip(f"AI 校正：原本是「{self.doc.display_name(review.baseline[row].speaker)}」")
+        if ai_review.text_changed(self.doc, row):
+            text.setBackground(CHANGED_COLOR)
+            text.setToolTip(f"AI 校正前：{review.baseline[row].text}")
 
     def import_file(self) -> None:
         """匯入已經有的逐字稿檔。"""
@@ -511,6 +556,17 @@ class DocumentPage(QWidget):
             return
         row, col = item.row(), item.column()
         seg = self.doc.segments[row]
+        if col == 3:  # 還原講者（勾／不勾可以來回切換）
+            from meeting_scribe.postprocess import ai_review
+
+            on = item.checkState() == Qt.CheckState.Checked
+            stamp = _hms(seg.start) if self.doc.has_timecodes else f"第 {row + 1} 段"
+            self.history.record(self.doc, f"{stamp} {'還原講者' if on else '取消還原講者'}")
+            ai_review.set_restored(self.doc, row, on)
+            self._dirty = True
+            self._fill_table()
+            self._update_history_buttons()
+            return
         text = item.text().strip()
         stamp = _hms(seg.start) if self.doc.has_timecodes else f"第 {row + 1} 段"
         if col == 2 and text != seg.text:
@@ -587,9 +643,25 @@ class DocumentPage(QWidget):
         self.panel.append(f"合併講者：{source} 併入 {target}（{count} 段）")
 
     # ---- AI 校正（語意與講者角色） ----
+    def _choose_correction_source(self) -> tuple[str, Path | None, Path | None] | None:
+        """先選擇校正方式：雲端比對，或使用已有的校正檔。取消時回傳 None。"""
+        from meeting_scribe.gui.correction_dialog import CorrectionSourceDialog
+
+        dialog = CorrectionSourceDialog(self, self.output_folder())
+        if dialog.exec() != CorrectionSourceDialog.DialogCode.Accepted:
+            return None
+        return (dialog.mode(), *dialog.paths())
+
     def ai_correct(self) -> None:
-        """整份逐字稿在背景跑完 AI 校正後，開啟確認視窗；使用者勾選的建議才套用。"""
+        """AI 校正：先選方式。雲端比對＝整份跑完後開啟確認視窗；已有校正檔＝依時間碼對齊後直接標記。"""
         if self.doc is None or self.panel.running:
+            return
+        choice = self._choose_correction_source()
+        if choice is None:
+            return
+        mode, draft, corrected = choice
+        if mode == "files":
+            self._load_correction_files(draft, corrected)  # type: ignore[arg-type]
             return
         doc = self.doc.model_copy(deep=True)  # 背景處理用當下的內容
         cfg = self.host.cfg
@@ -601,6 +673,45 @@ class DocumentPage(QWidget):
 
         self.panel.start("AI 校正", work, self._corrections_ready)
 
+    def _load_correction_files(self, draft: Path, corrected: Path) -> None:
+        """已有現成校正檔：以逐字稿草稿為主，依時間碼（容許誤差）對齊校正檔，套用並標記（可復原）。"""
+        from meeting_scribe.postprocess import ai_review
+
+        assert self.doc is not None
+        try:
+            base, joined, unmatched = ai_review.load_files(draft, corrected, Path(self.doc.folder) / "_work" / "review")
+        except ImportError_ as exc:
+            QMessageBox.warning(self, "AI 校正", str(exc))
+            return
+        self.history.record(self.doc, f"載入校正檔：{corrected.name}")
+        self.doc.segments = list(joined)
+        self.doc.speaker_names = {}
+        self.doc.ai_review = None
+        ai_review.start_review(self.doc, base, corrected.name, unmatched)
+        changed = sum(1 for i in range(len(joined)) if ai_review.speaker_changed(self.doc, i)
+                      or ai_review.text_changed(self.doc, i))
+        self._after_history_change("已載入校正檔", f"{corrected.name}：{len(joined)} 列，{changed} 列有變更（淡橘色）、"
+                                                f"{len(unmatched)} 列找不到對應或沒有講者（淡綠色）")
+
+    def _write_review_files(self, baseline: list[Any]) -> None:
+        """雲端比對後，在這場會議的輸出資料夾寫出「逐字稿草稿.txt」與「逐字稿草稿_AI校正.txt」（之後可以直接比對）。"""
+        from meeting_scribe.postprocess import ai_review
+
+        assert self.doc is not None
+        doc = self.doc
+        folder = self.output_folder()
+        title = self.title.toPlainText().strip()
+        try:
+            draft = ai_review.write_txt(baseline, folder / ai_review.DRAFT_FILE, title, "逐字稿草稿（AI 校正前）",
+                                        doc.display_name, doc.has_timecodes)
+            corrected = ai_review.write_txt(doc.segments, folder / ai_review.CORRECTED_FILE, title,
+                                            "逐字稿草稿（AI 校正後）", doc.display_name, doc.has_timecodes)
+        except OSError as exc:
+            self.panel.append(f"無法寫出 AI 校正的文字檔：{exc}")
+            return
+        self.panel.append(f"已輸出：{draft}")
+        self.panel.append(f"已輸出：{corrected}")
+
     def _open_correction_dialog(self, suggestions: Any) -> tuple[list[Any], list[Any], list[Any], list[Any]] | None:
         """顯示確認視窗，回傳勾選的（文字校正, 講者角色, 合併講者, 改講者）；取消時回傳 None。"""
         from meeting_scribe.gui.correction_dialog import CorrectionDialog
@@ -611,6 +722,7 @@ class DocumentPage(QWidget):
         return (*dialog.chosen(), *dialog.chosen_speaker_checks())
 
     def _corrections_ready(self, suggestions: Any) -> None:
+        from meeting_scribe.postprocess import ai_review
         from meeting_scribe.postprocess.semantic import apply_speaker_changes, apply_suggestions
 
         if self.doc is None:
@@ -633,8 +745,12 @@ class DocumentPage(QWidget):
         if merges or reassigns:
             parts.append(f"講者檢查 {len(merges) + len(reassigns)} 項")
         self.history.record(self.doc, f"AI 校正（{'、'.join(parts)}）")
+        baseline = list(self.doc.segments)  # AI 校正前＝比對基準（標記與還原講者用）
         merged, moved = apply_speaker_changes(self.doc, merges, reassigns)  # 先調整講者，再命名
-        applied, named = apply_suggestions(self.doc, fixes, roles)
+        applied, _ = apply_suggestions(self.doc, fixes, [])
+        named = ai_review.apply_roles_per_row(self.doc, roles)  # 逐列命名，每一列都能單獨還原講者
+        ai_review.start_review(self.doc, baseline, "雲端比對")
+        self._write_review_files(baseline)
         skipped = len(fixes) - applied
         label = (f"{applied} 處文字、{named} 位講者命名" + (f"、合併 {merged} 位講者" if merged else "")
                  + (f"、{moved} 段改講者" if moved else "") + (f"（{skipped} 處原文已改過，略過）" if skipped else ""))

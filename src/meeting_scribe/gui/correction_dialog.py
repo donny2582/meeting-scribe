@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import Qt
@@ -245,3 +246,72 @@ class CorrectionDialog(QDialog):
                 if name:
                     roles.append(RoleSuggestion(role.speaker, name, role.confidence, role.evidence, role.reason))
         return fixes, roles
+
+
+class CorrectionSourceDialog(QDialog):
+    """按下「AI 校正…」時先選擇：雲端比對，或使用已有的校正檔。"""
+
+    CLOUD, FILES = "cloud", "files"
+
+    def __init__(self, parent: QWidget | None, folder: Any) -> None:
+        from PySide6.QtWidgets import QButtonGroup, QFormLayout, QMessageBox, QRadioButton
+
+        from meeting_scribe.gui.widgets import FilePicker
+        from meeting_scribe.postprocess.ai_review import CORRECTED_FILE, DRAFT_FILE
+
+        super().__init__(parent)
+        self._message = QMessageBox
+        self.setWindowTitle("AI 校正")
+        self.resize(640, 320)
+        lay = QVBoxLayout(self)
+        lay.addWidget(QLabel("<b>要用哪一種方式校正？</b>"))
+        self.cloud = QRadioButton("① 雲端比對：由 AI 檢查錯字與講者（會產生費用，約 US$0.2–0.5）")
+        self.files = QRadioButton("② 已有現成校正檔：選擇逐字稿草稿與之前產生的 AI 校正檔，直接比對（不花費用）")
+        group = QButtonGroup(self)
+        for rb in (self.cloud, self.files):
+            group.addButton(rb)
+        self.cloud.setChecked(True)
+        lay.addWidget(self.cloud)
+        lay.addWidget(hint("跑完後列出建議讓您確認；套用後在表格以淡橘色標記，並在這場會議的資料夾輸出"
+                           f"「{CORRECTED_FILE}」與「{DRAFT_FILE}」。"))
+        lay.addWidget(self.files)
+        self.file_box = QWidget()
+        form = QFormLayout(self.file_box)
+        txt = "逐字稿 (*.txt *.srt *.docx *.json);;所有檔案 (*.*)"
+        self.draft = FilePicker("open", txt, "逐字稿草稿（比對基準）", "選擇逐字稿草稿")
+        self.corrected = FilePicker("open", txt, "逐字稿草稿_AI校正", "選擇 AI 校正檔")
+        folder = Path(folder) if folder else None
+        if folder is not None:
+            for picker, name in ((self.draft, DRAFT_FILE), (self.corrected, CORRECTED_FILE)):
+                if (folder / name).is_file():
+                    picker.set_path(folder / name)
+        form.addRow("逐字稿草稿：", self.draft)
+        form.addRow("AI 校正檔：", self.corrected)
+        form.addRow("", hint("以逐字稿草稿為主，依時間碼對齊校正檔（容許 ±2 秒誤差）；"
+                             "校正檔裡找不到對應、或沒有講者的列會標成淡綠色。會以對齊結果取代目前的表格內容（可復原）。"))
+        lay.addWidget(self.file_box)
+        self.cloud.toggled.connect(lambda _on: self.file_box.setEnabled(self.files.isChecked()))
+        self.file_box.setEnabled(False)
+        lay.addStretch(1)
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("確定")
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("取消")
+        buttons.accepted.connect(self._accept)
+        buttons.rejected.connect(self.reject)
+        lay.addWidget(buttons)
+
+    def mode(self) -> str:
+        return self.FILES if self.files.isChecked() else self.CLOUD
+
+    def paths(self) -> tuple[Any, Any]:
+        return self.draft.path(), self.corrected.path()
+
+    def _accept(self) -> None:
+        if self.mode() == self.FILES:
+            draft, corrected = self.paths()
+            missing = [label for label, p in (("逐字稿草稿", draft), ("AI 校正檔", corrected))
+                       if p is None or not p.is_file()]
+            if missing:
+                self._message.information(self, "AI 校正", "請選擇：" + "、".join(missing))
+                return
+        self.accept()

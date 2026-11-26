@@ -57,6 +57,16 @@ class MeetingInfo(BaseModel):
     want_transcript: bool = True  # 產出逐字稿 .docx（選用；產出項目至少要選一項）
 
 
+class AiReview(BaseModel):
+    """AI 校正的比對狀態：比對基準（逐字稿草稿）與校正後的講者，用來標記變更與逐列「還原講者」。"""
+
+    source: str = Field(description="校正來源：雲端比對，或使用者選的校正檔名稱")
+    baseline: list[RawSegment] = Field(description="比對基準（逐字稿草稿），與文件的片段一一對應")
+    corrected_speakers: list[str] = Field(description="AI 校正後的講者（取消「還原講者」時用）")
+    unmatched: list[int] = Field(default_factory=list, description="校正檔中找不到對應或沒有講者的列（淡綠色）")
+    restored: list[int] = Field(default_factory=list, description="勾選「還原講者」的列")
+
+
 class TranscriptDocument(BaseModel):
     """一份可編輯、可產出文件的逐字稿。"""
 
@@ -70,6 +80,7 @@ class TranscriptDocument(BaseModel):
     speaker_names: dict[str, str] = Field(default_factory=dict, description="講者代號 → 使用者命名")
     edited: bool = False
     info: MeetingInfo = Field(default_factory=MeetingInfo)
+    ai_review: AiReview | None = Field(default=None, description="AI 校正的比對狀態（標記與還原講者用）")
     original_segments: list[RawSegment] | None = Field(
         default=None, description="原本（轉錄或匯入時）的逐字稿，「還原原本內容」用；舊版存的文件沒有這一項")
 
@@ -88,6 +99,7 @@ class TranscriptDocument(BaseModel):
             return False
         self.segments = list(self.original_segments)
         self.speaker_names = {}
+        self.ai_review = None
         self.edited = False
         return True
 
@@ -147,17 +159,20 @@ class EditHistory:
     LIMIT = 200
 
     def __init__(self) -> None:
-        self._undo: list[tuple[str, list[RawSegment], dict[str, str]]] = []
+        self._undo: list[tuple[str, list[RawSegment], dict[str, str], AiReview | None]] = []
 
     @staticmethod
-    def _snapshot(doc: TranscriptDocument, label: str) -> tuple[str, list[RawSegment], dict[str, str]]:
-        return label, list(doc.segments), dict(doc.speaker_names)
+    def _snapshot(doc: TranscriptDocument, label: str) -> tuple[str, list[RawSegment], dict[str, str], AiReview | None]:
+        review = doc.ai_review.model_copy(deep=True) if doc.ai_review else None
+        return label, list(doc.segments), dict(doc.speaker_names), review
 
     @staticmethod
-    def _apply(doc: TranscriptDocument, state: tuple[str, list[RawSegment], dict[str, str]]) -> None:
-        _label, segments, names = state
+    def _apply(doc: TranscriptDocument,
+               state: tuple[str, list[RawSegment], dict[str, str], AiReview | None]) -> None:
+        _label, segments, names, review = state
         doc.segments = list(segments)
         doc.speaker_names = dict(names)
+        doc.ai_review = review.model_copy(deep=True) if review else None
         doc.edited = True
 
     def record(self, doc: TranscriptDocument, label: str) -> None:

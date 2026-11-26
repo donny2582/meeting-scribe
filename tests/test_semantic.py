@@ -170,6 +170,7 @@ def page(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Any:
                              segments=[RawSegment(start=i * 10, end=i * 10 + 5, speaker=s, text=t)
                                        for i, (s, t) in enumerate(TEXTS)])
     w.document.load(doc)
+    monkeypatch.setattr(w.document, "_choose_correction_source", lambda: ("cloud", None, None))  # 選「雲端比對」
     yield w.document
     w.document._dirty = False
     w.close()
