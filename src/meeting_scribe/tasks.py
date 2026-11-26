@@ -232,7 +232,12 @@ def suggest_corrections(
     from meeting_scribe import usage
     from meeting_scribe.llm import LLM_PROVIDERS, LLMError, create_llm, provider_of
     from meeting_scribe.postprocess.localize import build_reference, load_term_map
-    from meeting_scribe.postprocess.semantic import Suggestions, suggest_fixes, suggest_roles
+    from meeting_scribe.postprocess.semantic import (
+        Suggestions,
+        suggest_fixes,
+        suggest_reassignments,
+        suggest_roles,
+    )
 
     report = _guard(progress, cancel)
     entries = load_glossaries(default_glossaries())
@@ -258,16 +263,21 @@ def suggest_corrections(
         suggest_fixes(lines, info, names, entries, build_reference(load_term_map(), entries), llm, max_chars,
                       report, work / "semantic.json" if work else None, result)
         if llm is not None and want_roles:
-            report(90, "AI 推測講者角色")
             code_lines = [(i, stamp, s.speaker, s.text) for (i, stamp, _n, _t), s in zip(lines, doc.segments,
                                                                                           strict=True)]
+            report(70, "AI 推測講者角色、檢查是否有同一人被拆成兩個講者")
             suggest_roles(code_lines, info, speakers, set(doc.speaker_names), llm,
                           checkpoint_file=work / "roles.json" if work else None, result=result)
+            report(80, "AI 逐段檢查講者（標錯講者、一段混了兩個人）")
+            suggest_reassignments(code_lines, info, speakers, {s: doc.display_name(s) for s in speakers}, llm,
+                                  int(cfg.get("llm", {}).get("speaker_check_chars", 12000)), report,
+                                  work / "speaker_check.json" if work else None, result)
     except LLMError as exc:
-        if not (result.fixes or result.roles):
+        if result.empty():
             raise
         result.notes.append(f"AI 校正中斷（{exc}）：已完成的部分有存檔，再按一次會從中斷處繼續，不重複計費")
-    report(100, f"AI 校正完成：{len(result.fixes)} 處文字建議、{len(result.roles)} 位講者建議"
+    report(100, f"AI 校正完成：{len(result.fixes)} 處文字建議、{len(result.roles)} 位講者角色、"
+                f"{result.speaker_checks()} 項講者檢查"
                 + (f"（{result.reused} 批沿用先前結果）" if result.reused else "")
                 + (f"；{result.rejected} 筆修改幅度過大已略過" if result.rejected else ""))
     return result

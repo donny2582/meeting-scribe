@@ -601,15 +601,17 @@ class DocumentPage(QWidget):
 
         self.panel.start("AI 校正", work, self._corrections_ready)
 
-    def _open_correction_dialog(self, suggestions: Any) -> tuple[list[Any], list[Any]] | None:
-        """顯示確認視窗，回傳勾選的（文字校正, 講者角色）；取消時回傳 None。"""
+    def _open_correction_dialog(self, suggestions: Any) -> tuple[list[Any], list[Any], list[Any], list[Any]] | None:
+        """顯示確認視窗，回傳勾選的（文字校正, 講者角色, 合併講者, 改講者）；取消時回傳 None。"""
         from meeting_scribe.gui.correction_dialog import CorrectionDialog
 
         dialog = CorrectionDialog(self, self.doc, suggestions)
-        return dialog.chosen() if dialog.exec() == CorrectionDialog.DialogCode.Accepted else None
+        if dialog.exec() != CorrectionDialog.DialogCode.Accepted:
+            return None
+        return (*dialog.chosen(), *dialog.chosen_speaker_checks())
 
     def _corrections_ready(self, suggestions: Any) -> None:
-        from meeting_scribe.postprocess.semantic import apply_suggestions
+        from meeting_scribe.postprocess.semantic import apply_speaker_changes, apply_suggestions
 
         if self.doc is None:
             return
@@ -623,14 +625,19 @@ class DocumentPage(QWidget):
         if chosen is None:
             self.panel.append("AI 校正：沒有套用任何建議")
             return
-        fixes, roles = chosen
-        if not fixes and not roles:
+        fixes, roles, merges, reassigns = chosen
+        if not (fixes or roles or merges or reassigns):
             self.panel.append("AI 校正：沒有勾選任何建議")
             return
-        self.history.record(self.doc, f"AI 校正（{len(fixes)} 處文字、{len(roles)} 位講者）")
+        parts = [f"{len(fixes)} 處文字", f"{len(roles)} 位講者"]
+        if merges or reassigns:
+            parts.append(f"講者檢查 {len(merges) + len(reassigns)} 項")
+        self.history.record(self.doc, f"AI 校正（{'、'.join(parts)}）")
+        merged, moved = apply_speaker_changes(self.doc, merges, reassigns)  # 先調整講者，再命名
         applied, named = apply_suggestions(self.doc, fixes, roles)
         skipped = len(fixes) - applied
-        label = f"{applied} 處文字、{named} 位講者" + (f"（{skipped} 處原文已改過，略過）" if skipped else "")
+        label = (f"{applied} 處文字、{named} 位講者命名" + (f"、合併 {merged} 位講者" if merged else "")
+                 + (f"、{moved} 段改講者" if moved else "") + (f"（{skipped} 處原文已改過，略過）" if skipped else ""))
         self._after_history_change("已套用 AI 校正", label)
 
     # ---- 復原、還原原本內容 ----

@@ -71,6 +71,7 @@ diarization_model = "pyannote/speaker-diarization-3.1"
 provider = "anthropic"          # anthropic 或 openai
 localize_batch_chars = 3000     # 每批送出的中文字數
 correct_batch_chars = 2500      # 語意校正每批送出的字數
+speaker_check_chars = 12000     # 講者檢查每段送出的字數（要看得到前後對話）
 max_retries = 3
 timeout_sec = 600
 summary_model = ""        # 第 2 階段設定

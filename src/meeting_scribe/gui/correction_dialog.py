@@ -1,4 +1,4 @@
-"""AI 校正的確認視窗：列出文字校正與講者角色建議，使用者勾選（可修改建議內容）後才套用。"""
+"""AI 校正的確認視窗：文字校正、講者角色、講者檢查三個分頁，使用者勾選（可修改建議內容）後才套用。"""
 
 from __future__ import annotations
 
@@ -22,7 +22,13 @@ from PySide6.QtWidgets import (
 )
 
 from meeting_scribe.gui.widgets import hint
-from meeting_scribe.postprocess.semantic import RoleSuggestion, Suggestions, TextFix
+from meeting_scribe.postprocess.semantic import (
+    RoleSuggestion,
+    SegmentReassign,
+    SpeakerMerge,
+    Suggestions,
+    TextFix,
+)
 
 _READONLY = Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled
 _EDITABLE = _READONLY | Qt.ItemFlag.ItemIsEditable
@@ -54,10 +60,16 @@ class CorrectionDialog(QDialog):
         self.tabs = QTabWidget()
         self.fix_table = self._fix_table(suggestions.fixes)
         self.role_table = self._role_table(suggestions.roles)
+        self.check_table = self._check_table(suggestions)
         self.tabs.addTab(self._with_tools(self.fix_table), f"文字校正（{len(suggestions.fixes)}）")
         self.tabs.addTab(self._with_tools(self.role_table), f"講者角色（{len(suggestions.roles)}）")
-        if not suggestions.fixes and suggestions.roles:
-            self.tabs.setCurrentIndex(1)
+        self.tabs.addTab(self._with_tools(self.check_table, "AI 依對話邏輯檢查講者（聽不到聲音，只是建議）。"
+                                          "「可能混了兩個人」只提醒，請在逐字稿表格中手動處理。"),
+                         f"講者檢查（{suggestions.speaker_checks()}）")
+        for i, n in enumerate((len(suggestions.fixes), len(suggestions.roles), suggestions.speaker_checks())):
+            if n:
+                self.tabs.setCurrentIndex(i)
+                break
         lay.addWidget(self.tabs, 1)
 
         buttons = QDialogButtonBox()
@@ -130,10 +142,62 @@ class CorrectionDialog(QDialog):
         t.resizeRowsToContents()
         return t
 
-    def _with_tools(self, table: QTableWidget) -> QWidget:
+    def _who(self, speaker: str) -> str:
+        name = self.doc.display_name(speaker)
+        return name if name == speaker else f"{name}（{speaker}）"
+
+    def _stamp(self, index: int) -> str:
+        seg = self.doc.segments[index]
+        return _hms(seg.start) if self.doc.has_timecodes else f"第 {index + 1} 段"
+
+    def _quote(self, index: int, limit: int = 60) -> str:
+        text = self.doc.segments[index].text
+        return text if len(text) <= limit else text[:limit] + "…"
+
+    def _check_table(self, s: Suggestions) -> QTableWidget:
+        """講者檢查：合併講者、改講者、可能混了兩個人（只提醒）。"""
+        t = self._table(["套用", "類型", "時間", "內容", "建議", "把握度", "理由"], [3, 6])
+        rows = len(s.merges) + len(s.reassigns) + len(s.mixed)
+        t.setRowCount(rows)
+        row = 0
+        for m in s.merges:
+            t.setItem(row, 0, self._check_item(m.confidence in ("高", "中")))
+            t.setItem(row, 1, self._cell("合併講者"))
+            t.setItem(row, 2, self._cell("、".join(self._stamp(i) for i in m.evidence) or "—"))
+            t.setItem(row, 3, self._cell("\n".join(f"「{self._quote(i, 40)}」" for i in m.evidence) or "（沒有依據）"))
+            t.setItem(row, 4, self._cell(f"{self._who(m.source)} 併入 {self._who(m.target)}"))
+            t.setItem(row, 5, self._cell(m.confidence))
+            t.setItem(row, 6, self._cell(m.reason))
+            row += 1
+        for r in s.reassigns:
+            t.setItem(row, 0, self._check_item(r.confidence in ("高", "中")))
+            t.setItem(row, 1, self._cell("改講者"))
+            t.setItem(row, 2, self._cell(self._stamp(r.index)))
+            t.setItem(row, 3, self._cell(self._quote(r.index)))
+            t.setItem(row, 4, self._cell(f"{self._who(r.current)} → {self._who(r.suggested)}"))
+            t.setItem(row, 5, self._cell(r.confidence))
+            t.setItem(row, 6, self._cell(r.reason))
+            row += 1
+        for x in s.mixed:
+            info = self._cell("只提醒")
+            info.setForeground(QColor("#b26a00"))
+            t.setItem(row, 0, info)
+            t.setItem(row, 1, self._cell("可能混了兩個人"))
+            t.setItem(row, 2, self._cell(self._stamp(x.index)))
+            t.setItem(row, 3, self._cell(self._quote(x.index, 120)))
+            t.setItem(row, 4, self._cell("請在逐字稿表格中手動處理"))
+            t.setItem(row, 5, self._cell("—"))
+            t.setItem(row, 6, self._cell(x.reason))
+            row += 1
+        t.resizeRowsToContents()
+        return t
+
+    def _with_tools(self, table: QTableWidget, note: str = "") -> QWidget:
         w = QWidget()
         v = QVBoxLayout(w)
         v.setContentsMargins(0, 6, 0, 0)
+        if note:
+            v.addWidget(hint(note))
         row = QHBoxLayout()
         for text, state in (("全部勾選", Qt.CheckState.Checked), ("全部取消", Qt.CheckState.Unchecked)):
             b = QPushButton(text)
@@ -149,11 +213,25 @@ class CorrectionDialog(QDialog):
     @staticmethod
     def _set_all(table: QTableWidget, state: Qt.CheckState) -> None:
         for row in range(table.rowCount()):
-            table.item(row, 0).setCheckState(state)
+            item = table.item(row, 0)
+            if item.flags() & Qt.ItemFlag.ItemIsUserCheckable:  # 「只提醒」的列沒有勾選框
+                item.setCheckState(state)
 
     # ---- 結果 ----
+    def _checked(self, table: QTableWidget, row: int) -> bool:
+        item = table.item(row, 0)
+        return bool(item.flags() & Qt.ItemFlag.ItemIsUserCheckable) and item.checkState() == Qt.CheckState.Checked
+
+    def chosen_speaker_checks(self) -> tuple[list[SpeakerMerge], list[SegmentReassign]]:
+        """勾選的講者檢查建議（合併講者、改講者）。"""
+        s = self.suggestions
+        merges = [m for row, m in enumerate(s.merges) if self._checked(self.check_table, row)]
+        offset = len(s.merges)
+        reassigns = [r for row, r in enumerate(s.reassigns) if self._checked(self.check_table, offset + row)]
+        return merges, reassigns
+
     def chosen(self) -> tuple[list[TextFix], list[RoleSuggestion]]:
-        """勾選的建議（含使用者在表格中的修改）。"""
+        """勾選的文字校正與講者角色建議（含使用者在表格中的修改）。"""
         fixes = []
         for row, fix in enumerate(self.suggestions.fixes):
             if self.fix_table.item(row, 0).checkState() == Qt.CheckState.Checked:

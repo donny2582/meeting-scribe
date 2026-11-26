@@ -5,6 +5,8 @@
    - AI：依會議名稱、議程、前後文與詞庫，找出語音辨識造成的同音／近音錯字、專有名詞與機關名稱寫錯。
      規則嚴格：只修辨識錯誤，不改寫、不潤飾、不刪贅字；數字不可變動；修改幅度太大的建議會被擋下。
 2. 講者角色：AI 依發言內容推測每位講者的身分（例：主席、公路局），附依據片段與把握度。
+3. 講者檢查：AI 依對話邏輯找出「同一人被拆成兩個講者」（建議合併）、「片段標錯講者」（建議改講者），
+   以及「一個片段裡可能混了兩個人」（只提醒，請使用者手動處理）。AI 只看文字、聽不到聲音，所以只提出建議。
 
 兩者都只產生「建議」，由使用者在確認視窗勾選後才套用（可以用「復原」取消）。
 AI 結果每批存檔：中斷後再執行只補做剩下的批次；內容沒變時直接沿用，不重複計費。
@@ -53,8 +55,37 @@ ROLE_SCHEMA: dict[str, Any] = {
             "reason": {"type": "string"},
         },
         "required": ["speaker", "name", "confidence", "evidence", "reason"], "additionalProperties": False,
+    }}, "merges": {"type": "array", "items": {
+        "type": "object",
+        "properties": {
+            "source": {"type": "string"},
+            "target": {"type": "string"},
+            "confidence": {"type": "string", "enum": list(CONFIDENCE)},
+            "evidence": {"type": "array", "items": {"type": "string"}},
+            "reason": {"type": "string"},
+        },
+        "required": ["source", "target", "confidence", "evidence", "reason"], "additionalProperties": False,
     }}},
-    "required": ["speakers"], "additionalProperties": False,
+    "required": ["speakers", "merges"], "additionalProperties": False,
+}
+
+CHECK_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {"reassign": {"type": "array", "items": {
+        "type": "object",
+        "properties": {
+            "id": {"type": "string"},
+            "speaker": {"type": "string"},
+            "confidence": {"type": "string", "enum": list(CONFIDENCE)},
+            "reason": {"type": "string"},
+        },
+        "required": ["id", "speaker", "confidence", "reason"], "additionalProperties": False,
+    }}, "mixed": {"type": "array", "items": {
+        "type": "object",
+        "properties": {"id": {"type": "string"}, "reason": {"type": "string"}},
+        "required": ["id", "reason"], "additionalProperties": False,
+    }}},
+    "required": ["reassign", "mixed"], "additionalProperties": False,
 }
 
 FIX_PROMPT = """你是臺灣政府機關的會議逐字稿校對員。逐字稿由語音辨識產生，請依「會議資訊、前後文、詞庫」找出語音辨識造成的錯字並修正。
@@ -83,7 +114,23 @@ ROLE_PROMPT = """你是臺灣政府機關的會議紀錄人員。逐字稿的講
 - name 寫身分或單位（例：主席、公路局、公共運輸及監理司），不要編造人名；沒有依據時 name 寫「無法判斷」。
 - confidence：高＝有明確自稱或點名回應；中＝依發言內容推測；低＝只是猜測。
 - evidence 填 1～3 個支持判斷的片段編號（例：S0012）。
-- 每位講者都要回傳一次。只輸出指定格式的 JSON。"""
+- speakers：每位要推測的講者都要回傳一次。
+- merges：語音辨識有時把同一個人拆成兩個講者代號。若兩個代號明顯是同一人（例：都自稱同一單位、發言內容與語氣一致且一前一後接續），
+  填 source（要併入別人的代號）與 target（保留的代號），並附依據片段；只是同一單位的不同人、或沒有把握時不要建議。沒有就給空陣列。
+只輸出指定格式的 JSON。"""
+
+CHECK_PROMPT = """你是臺灣政府機關的會議紀錄人員。逐字稿的講者由語音辨識自動判斷，兩個人接話很快時，常把下一個人的話標成上一個人。
+請依對話邏輯檢查每個片段的講者是否合理。
+
+reassign（片段標錯講者，建議改成另一位「已存在」的講者代號）：
+- 例：主席說「請公路局說明」，下一段明顯是公路局在報告，卻仍標成主席 → 改成公路局的講者代號。
+- 例：一段話在回答上一段的提問，卻和提問者標成同一位講者 → 改成回答者的代號。
+- 例：自稱「我們監理司」的片段，標成了別的單位的講者代號。
+- speaker 只能填講者清單中已存在的代號；confidence：高＝自稱或點名回應很明確；中＝依對話推測；低＝只是猜測。
+
+mixed（一個片段裡可能混了兩個人的話，例如同一段裡有提問又有回答）：只標出片段編號與原因，不要修改。
+
+規則：只檢查「請檢查的片段」；「前文」只供參考。沒有把握時不要建議，寧可少報。沒有就給空陣列。只輸出指定格式的 JSON。"""
 
 
 @dataclass
@@ -109,11 +156,44 @@ class RoleSuggestion:
 
 
 @dataclass
+class SpeakerMerge:
+    """建議合併的講者（同一人被拆成兩個代號）。"""
+
+    source: str  # 要併入別人的講者代號
+    target: str  # 保留的講者代號
+    confidence: str
+    evidence: list[int]
+    reason: str
+
+
+@dataclass
+class SegmentReassign:
+    """建議改講者的片段。"""
+
+    index: int
+    current: str  # 目前的講者代號
+    suggested: str  # 建議的講者代號
+    confidence: str
+    reason: str
+
+
+@dataclass
+class MixedSegment:
+    """可能混了兩個人的片段（只提醒）。"""
+
+    index: int
+    reason: str
+
+
+@dataclass
 class Suggestions:
     """AI 校正的結果（尚未套用）。"""
 
     fixes: list[TextFix] = field(default_factory=list)
     roles: list[RoleSuggestion] = field(default_factory=list)
+    merges: list[SpeakerMerge] = field(default_factory=list)
+    reassigns: list[SegmentReassign] = field(default_factory=list)
+    mixed: list[MixedSegment] = field(default_factory=list)
     ai_used: bool = False
     batches: int = 0
     reused: int = 0
@@ -121,7 +201,10 @@ class Suggestions:
     notes: list[str] = field(default_factory=list)
 
     def empty(self) -> bool:
-        return not self.fixes and not self.roles
+        return not (self.fixes or self.roles or self.merges or self.reassigns or self.mixed)
+
+    def speaker_checks(self) -> int:
+        return len(self.merges) + len(self.reassigns) + len(self.mixed)
 
 
 # ---- 詞庫規則 ----
@@ -307,10 +390,10 @@ def suggest_roles(
     lines: list[tuple[int, str, str, str]], info: dict[str, Any], speakers: list[str], named: set[str],
     llm: LLMClient, max_chars: int = 40000, checkpoint_file: Path | None = None, result: Suggestions | None = None,
 ) -> Suggestions:
-    """講者角色建議。lines 的講者欄是講者代號；named＝使用者已命名的講者（不再建議）。"""
+    """講者角色與合併建議。lines 的講者欄是講者代號；named＝使用者已命名的講者（不再建議名稱，但仍可建議合併）。"""
     result = result or Suggestions()
     targets = [s for s in speakers if s not in named]
-    if not targets:
+    if not targets and len(speakers) < 2:
         return result
     per_speaker: dict[str, int] = {}
     chosen: list[tuple[int, str, str, str]] = []
@@ -324,8 +407,8 @@ def suggest_roles(
         per_speaker[spk] = per_speaker.get(spk, 0) + 1
         total += len(line[3])
     text = "\n".join(f"{_sid(i)} [{stamp}] {spk}：{t}" for i, stamp, spk, t in chosen)
-    user = (meeting_context(info, speakers) + "\n\n請推測這些講者的身分：" + "、".join(targets)
-            + "\n\n逐字稿：\n" + text)
+    user = (meeting_context(info, speakers) + "\n\n請推測這些講者的身分：" + ("、".join(targets) or "（都已命名，不用推測）")
+            + "\n並檢查有沒有同一人被拆成兩個講者代號（merges）。\n\n逐字稿：\n" + text)
     model = llm.model_for(TASK)
     saved = _load(checkpoint_file)
     key = _key(PROMPT_VERSION, model, "roles", user)
@@ -350,7 +433,96 @@ def suggest_roles(
         if not evidence:
             confidence = "低"
         result.roles.append(RoleSuggestion(spk, name, str(confidence), evidence, str(item.get("reason", "")).strip()))
+    seen: set[str] = set()
+    for item in data.get("merges", []):
+        if not isinstance(item, dict):
+            continue
+        source, target = str(item.get("source", "")).strip(), str(item.get("target", "")).strip()
+        if source not in speakers or target not in speakers or source == target or source in seen:
+            continue
+        seen.add(source)
+        evidence = [valid_ids[e] for e in item.get("evidence", []) if e in valid_ids][:3]
+        confidence = item.get("confidence") if item.get("confidence") in CONFIDENCE else "低"
+        result.merges.append(SpeakerMerge(source, target, str(confidence if evidence else "低"), evidence,
+                                          str(item.get("reason", "")).strip()))
     return result
+
+
+def suggest_reassignments(
+    lines: list[tuple[int, str, str, str]], info: dict[str, Any], speakers: list[str], names: dict[str, str],
+    llm: LLMClient, max_chars: int = 12000, progress: ProgressFn | None = None,
+    checkpoint_file: Path | None = None, result: Suggestions | None = None,
+) -> Suggestions:
+    """逐段檢查講者：標錯講者（建議改成已存在的講者）與可能混了兩個人的片段。lines 的講者欄是講者代號。"""
+    result = result or Suggestions()
+    if len(speakers) < 2:
+        return result
+    current = {i: spk for i, _s, spk, _t in lines}
+    roster = "、".join(f"{s}（{names[s]}）" if names.get(s) and names[s] != s else s for s in speakers)
+    context = meeting_context(info, speakers) + "\n講者代號與目前的名稱：" + roster
+    model = llm.model_for(TASK)
+    saved = _load(checkpoint_file)
+    windows = _batches([(i, f"{_sid(i)} [{stamp}] {spk}：{text}") for i, stamp, spk, text in lines], max_chars)
+    prev: list[tuple[int, str]] = []
+    for n, window in enumerate(windows, start=1):
+        head = [t for _, t in prev[-5:]]
+        body = [t for _, t in window]
+        key = _key(PROMPT_VERSION, model, "check", context, head, body)
+        if key in saved:
+            data = saved[key]
+            result.reused += 1
+        else:
+            if progress:
+                progress(100.0 * (n - 1) / len(windows), f"AI 講者檢查中（第 {n}/{len(windows)} 段）")
+            user = (context + "\n\n" + ("前文（只供參考）：\n" + "\n".join(head) + "\n\n" if head else "")
+                    + "請檢查的片段：\n" + "\n".join(body))
+            try:
+                data = llm.complete_json(CHECK_PROMPT, user, CHECK_SCHEMA, task=TASK)
+            except LLMError as exc:
+                if exc.fatal:
+                    raise
+                result.notes.append(f"講者檢查第 {n} 段的 AI 回應無法使用，已略過")
+                prev = window
+                continue
+            saved[key] = data
+            _save(checkpoint_file, saved)
+            result.batches += 1
+        ids = {_sid(i): i for i, _ in window}
+        for item in data.get("reassign", []):
+            idx = ids.get(str(item.get("id", "")))
+            target = str(item.get("speaker", "")).strip()
+            if idx is None or target not in speakers or target == current[idx]:
+                continue
+            confidence = item.get("confidence") if item.get("confidence") in CONFIDENCE else "低"
+            result.reassigns.append(SegmentReassign(idx, current[idx], target, str(confidence),
+                                                    str(item.get("reason", "")).strip()))
+        for item in data.get("mixed", []):
+            idx = ids.get(str(item.get("id", "")))
+            if idx is not None:
+                result.mixed.append(MixedSegment(idx, str(item.get("reason", "")).strip()))
+        prev = window
+    return result
+
+
+def apply_speaker_changes(doc: Any, merges: list[SpeakerMerge], reassigns: list[SegmentReassign]) -> tuple[int, int]:
+    """套用勾選的講者檢查建議，回傳（合併的講者數, 改講者的片段數）。
+
+    先改片段的講者，再合併講者；片段的講者已經和建議時不同（之後手動改過）時略過。
+    """
+    moved = 0
+    for r in reassigns:
+        if 0 <= r.index < len(doc.segments) and doc.segments[r.index].speaker == r.current:
+            doc.segments[r.index] = doc.segments[r.index].model_copy(
+                update={"speaker": r.suggested, "speaker_uncertain": False})
+            moved += 1
+    merged = 0
+    for m in merges:
+        speakers = doc.speakers()
+        if m.source in speakers and m.target in speakers and doc.merge_speaker(m.source, m.target):
+            merged += 1
+    if moved or merged:
+        doc.edited = True
+    return merged, moved
 
 
 def apply_suggestions(doc: Any, fixes: list[TextFix], roles: list[RoleSuggestion]) -> tuple[int, int]:
