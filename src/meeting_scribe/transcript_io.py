@@ -70,6 +70,26 @@ class TranscriptDocument(BaseModel):
     speaker_names: dict[str, str] = Field(default_factory=dict, description="講者代號 → 使用者命名")
     edited: bool = False
     info: MeetingInfo = Field(default_factory=MeetingInfo)
+    original_segments: list[RawSegment] | None = Field(
+        default=None, description="原本（轉錄或匯入時）的逐字稿，「還原原本內容」用；舊版存的文件沒有這一項")
+
+    def model_post_init(self, _context: object) -> None:
+        """新建立的文件記下原本的內容（從 document.json 讀入時保留檔案裡的紀錄）。"""
+        if self.original_segments is None and not self.edited and not self.speaker_names:
+            self.original_segments = list(self.segments)
+
+    # ---- 還原原本內容 ----
+    def has_original(self) -> bool:
+        return self.original_segments is not None
+
+    def restore_original(self) -> bool:
+        """逐字稿內容與講者還原成原本的樣子（會議資訊不變）。沒有原本的紀錄時回傳 False。"""
+        if self.original_segments is None:
+            return False
+        self.segments = list(self.original_segments)
+        self.speaker_names = {}
+        self.edited = False
+        return True
 
     # ---- 講者 ----
     def speakers(self) -> list[str]:
@@ -118,7 +138,7 @@ class TranscriptDocument(BaseModel):
 
 
 class EditHistory:
-    """逐字稿編輯的復原／重做（只在這次開啟期間有效，不存檔）。
+    """逐字稿編輯的復原（只在這次開啟期間有效，不存檔）。
 
     每次修改前呼叫 ``record(文件, 動作說明)`` 記下修改前的逐字稿片段與講者命名；
     片段本身不會被原地修改（都用 model_copy 換成新物件），所以只需複製清單，很省記憶體。
@@ -128,7 +148,6 @@ class EditHistory:
 
     def __init__(self) -> None:
         self._undo: list[tuple[str, list[RawSegment], dict[str, str]]] = []
-        self._redo: list[tuple[str, list[RawSegment], dict[str, str]]] = []
 
     @staticmethod
     def _snapshot(doc: TranscriptDocument, label: str) -> tuple[str, list[RawSegment], dict[str, str]]:
@@ -142,40 +161,24 @@ class EditHistory:
         doc.edited = True
 
     def record(self, doc: TranscriptDocument, label: str) -> None:
-        """修改前呼叫：記下目前的狀態。新的修改會清掉「重做」。"""
+        """修改前呼叫：記下目前的狀態。"""
         self._undo.append(self._snapshot(doc, label))
         del self._undo[:-self.LIMIT]
-        self._redo.clear()
 
     def undo(self, doc: TranscriptDocument) -> str | None:
         """回到上一步，回傳被復原的動作說明；沒有可以復原時回傳 None。"""
         if not self._undo:
             return None
         state = self._undo.pop()
-        self._redo.append(self._snapshot(doc, state[0]))
-        self._apply(doc, state)
-        return state[0]
-
-    def redo(self, doc: TranscriptDocument) -> str | None:
-        """重做剛才復原的動作，回傳動作說明；沒有時回傳 None。"""
-        if not self._redo:
-            return None
-        state = self._redo.pop()
-        self._undo.append(self._snapshot(doc, state[0]))
         self._apply(doc, state)
         return state[0]
 
     def clear(self) -> None:
         self._undo.clear()
-        self._redo.clear()
 
     @property
     def undo_label(self) -> str | None:
         return self._undo[-1][0] if self._undo else None
-
-    @property
-    def redo_label(self) -> str | None:
-        return self._redo[-1][0] if self._redo else None
 
 
 def from_stt_result(result: SttResult, folder: Path, audio: Path | None = None) -> TranscriptDocument:

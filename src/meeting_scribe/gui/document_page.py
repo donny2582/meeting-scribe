@@ -91,6 +91,7 @@ class DocumentPage(QWidget):
         self._dirty = False
         self._loading = False
         self.history = EditHistory()
+        self._opened: tuple[list[Any], dict[str, str]] | None = None  # 舊版文件沒有原本內容時，改用開啟時的內容
 
         body = QWidget()
         lay = QVBoxLayout(body)
@@ -119,7 +120,7 @@ class DocumentPage(QWidget):
         v = QVBoxLayout(self.transcript_box)
         v.addWidget(hint("按兩下「內容」修正錯字；「講者」可以改成單位名稱（例：公路局），只改這一段。"
                          "要一次改全部，請用「講者命名…」；同一人被拆成兩個講者時用「合併講者…」。"
-                         "改錯了可以按「↶ 復原」（Ctrl+Z）回到上一步。"))
+                         "改錯了可以按「↶ 復原」（Ctrl+Z）回到上一步，或「還原原本內容…」回到轉錄或匯入時的逐字稿。"))
         self.table = QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(["時間碼", "講者", "內容"])
         header = self.table.horizontalHeader()
@@ -139,18 +140,16 @@ class DocumentPage(QWidget):
         self.count_label = hint("")
         self.undo_button = QPushButton("↶ 復原")
         self.undo_button.clicked.connect(self.undo)
-        self.redo_button = QPushButton("↷ 重做")
-        self.redo_button.clicked.connect(self.redo)
+        self.restore_button = QPushButton("還原原本內容…")
+        self.restore_button.clicked.connect(self.restore_original)
         tools.addWidget(rename)
         tools.addWidget(merge)
         tools.addSpacing(16)
         tools.addWidget(self.undo_button)
-        tools.addWidget(self.redo_button)
+        tools.addWidget(self.restore_button)
         tools.addStretch(1)
-        for keys, fn in ((QKeySequence.StandardKey.Undo, self.undo), (QKeySequence.StandardKey.Redo, self.redo),
-                         ("Ctrl+Shift+Z", self.redo)):
-            sc = QShortcut(QKeySequence(keys), self.transcript_box, activated=fn)
-            sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        sc = QShortcut(QKeySequence(QKeySequence.StandardKey.Undo), self.transcript_box, activated=self.undo)
+        sc.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         self._update_history_buttons()
         tools.addWidget(self.count_label)
         v.addWidget(self.table, 1)
@@ -424,6 +423,7 @@ class DocumentPage(QWidget):
         self.want_clean.setChecked(info.clean_fillers)
         self.want_transcript.setChecked(info.want_transcript)
         self.history.clear()
+        self._opened = None if doc.has_original() else (list(doc.segments), dict(doc.speaker_names))
         self._fill_table()
         self._update_labels()
         self._update_history_buttons()
@@ -577,14 +577,15 @@ class DocumentPage(QWidget):
         self.host.statusBar().showMessage(f"已合併 {count} 段", 5000)
         self.panel.append(f"合併講者：{source} 併入 {target}（{count} 段）")
 
-    # ---- 復原、重做 ----
+    # ---- 復原、還原原本內容 ----
     def _update_history_buttons(self) -> None:
         editable = self.doc is not None and not getattr(self, "_busy", False)
-        undo, redo = self.history.undo_label, self.history.redo_label
+        undo = self.history.undo_label
         self.undo_button.setEnabled(editable and undo is not None)
-        self.redo_button.setEnabled(editable and redo is not None)
+        self.restore_button.setEnabled(editable)
         self.undo_button.setToolTip(f"復原：{undo}（Ctrl+Z）" if undo else "沒有可以復原的修改")
-        self.redo_button.setToolTip(f"重做：{redo}（Ctrl+Y）" if redo else "沒有可以重做的修改")
+        self.restore_button.setToolTip("逐字稿內容與講者回到原本（轉錄或匯入時）的樣子；會議資訊不受影響。"
+                                       "還原後反悔可以按「↶ 復原」")
 
     def _after_history_change(self, action: str, label: str) -> None:
         self._dirty = True
@@ -601,13 +602,26 @@ class DocumentPage(QWidget):
         if label:
             self._after_history_change("已復原", label)
 
-    def redo(self) -> None:
-        """重做剛才復原的動作（Ctrl+Y）。"""
-        if self.doc is None or self.table.state() == QAbstractItemView.State.EditingState:
+    def restore_original(self) -> None:
+        """還原原本內容：逐字稿與講者回到轉錄或匯入時的樣子（還原後可以按「復原」反悔）。"""
+        if self.doc is None:
             return
-        label = self.history.redo(self.doc)
-        if label:
-            self._after_history_change("已重做", label)
+        if self.doc.has_original():
+            what = "原本（轉錄或匯入時）"
+        else:
+            what = "這次開啟時（這份文件是舊版存的，沒有原本內容的紀錄）"
+        answer = QMessageBox.question(
+            self, "還原原本內容",
+            f"要把逐字稿內容與講者還原成{what}的樣子嗎？\n\n"
+            "・所有文字修改、講者命名、合併講者都會取消\n"
+            "・會議資訊與產出選項不受影響\n"
+            "・還原後如果反悔，可以按「↶ 復原」回來")
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.history.record(self.doc, "還原原本內容")
+        if not self.doc.restore_original() and self._opened is not None:
+            self.doc.segments, self.doc.speaker_names = list(self._opened[0]), dict(self._opened[1])
+        self._after_history_change("已還原", "逐字稿回到" + ("原本的內容" if self.doc.has_original() else "開啟時的內容"))
 
     # ---- 儲存與產出 ----
     def collect_info(self) -> MeetingInfo:
