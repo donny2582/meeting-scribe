@@ -148,6 +148,7 @@ class TranscribePage(QWidget):
         form = QFormLayout(box)
         self.engine = _engine_combo(cfg.get("stt", {}).get("default_engine", "azure"))
         self.engine.currentIndexChanged.connect(lambda _i: self.host.engines_changed())
+        self.engine.currentIndexChanged.connect(lambda _i: self._update_speaker_count())
         ui = cfg.get("ui", {})
         self.languages = LanguagePicker(host.registry, ui.get("last_languages")
                                         or cfg.get("languages", {}).get("default", ["zh", "en"]))
@@ -155,6 +156,10 @@ class TranscribePage(QWidget):
         self.speakers.setRange(0, 36)
         self.speakers.setSpecialValueText("自動")
         self.speakers.setToolTip("提供給語者辨識參考；不確定就用「自動」。")
+        self.speakers_note = hint("")
+        speakers_row = QHBoxLayout()
+        speakers_row.addWidget(self.speakers)
+        speakers_row.addWidget(self.speakers_note, 1)
         self.glossaries = GlossaryChecklist()
         manage = QPushButton("管理詞庫…")
         manage.clicked.connect(lambda: self.host.go_to("glossary"))
@@ -163,7 +168,7 @@ class TranscribePage(QWidget):
         g_row.addWidget(manage, 0, Qt.AlignmentFlag.AlignTop)
         form.addRow("引擎：", self.engine)
         form.addRow("會議語言：", self.languages)
-        form.addRow("預估講者人數：", self.speakers)
+        form.addRow("預估講者人數：", speakers_row)
         form.addRow("套用詞庫：", g_row)
         lay.addWidget(box)
 
@@ -198,6 +203,7 @@ class TranscribePage(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(_scroll(body))
+        self._update_speaker_count()
 
     def _open_output_root(self) -> None:
         root = self.output.path()
@@ -218,6 +224,20 @@ class TranscribePage(QWidget):
     def selected_engines(self) -> list[str]:
         return [str(self.engine.currentData())]
 
+    def _update_speaker_count(self) -> None:
+        """只有支援的引擎（Azure）可以指定講者人數；其他引擎鎖定為「自動」並說明。"""
+        from meeting_scribe.stt import SPEAKER_COUNT_ENGINES
+
+        engine = str(self.engine.currentData())
+        supported = engine in SPEAKER_COUNT_ENGINES
+        if not supported:
+            self.speakers.setValue(0)  # 自動
+        self.speakers.setEnabled(supported)
+        label = self.engine.currentText()
+        self.speakers_note.setText("" if supported else f"{label} 會自動判斷講者人數，無法指定。")
+        self.speakers.setToolTip("提供給語者辨識參考；不確定就用「自動」。" if supported
+                                 else f"{label} 不支援指定講者人數，一律自動判斷。")
+
     def start(self) -> None:
         """檢查輸入後在背景轉錄。"""
         audio = self.audio.path()
@@ -234,7 +254,9 @@ class TranscribePage(QWidget):
         engine = str(self.engine.currentData())
         langs = self.languages.codes()
         glossaries = self.glossaries.paths()
-        speakers = self.speakers.value() or None
+        from meeting_scribe.stt import SPEAKER_COUNT_ENGINES
+
+        speakers = (self.speakers.value() or None) if engine in SPEAKER_COUNT_ENGINES else None
         registry = self.host.registry
         clip = self.range_picker.clip()
         self.range_picker.stop()
