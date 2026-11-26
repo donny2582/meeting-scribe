@@ -11,6 +11,7 @@ from meeting_scribe import config as app_config
 def _isolate_user_data(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local"))
+    monkeypatch.setenv("MEETINGSCRIBE_NO_UPDATE_CHECK", "1")  # 測試不連 GitHub
     monkeypatch.setattr(app_config, "documents_dir", lambda: tmp_path / "documents")
     for name in app_config.SECRET_NAMES:
         monkeypatch.delenv(f"MEETINGSCRIBE_{name.upper()}", raising=False)

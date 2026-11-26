@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
 import time
@@ -326,23 +327,32 @@ class RunPanel(QWidget):
         self._timer.start()
         self.busy_changed.emit(True)
 
-        def run() -> None:
-            import logging
+        signals = self.signals  # 執行緒自己持有訊號物件：視窗關閉後仍可安全結束
 
+        def emit(signal: Any, *args: Any) -> None:
+            try:
+                signal.emit(*args)
+            except RuntimeError:  # 視窗已經關閉（訊號物件已刪除）：工作結果不再需要，安靜結束
+                logging.getLogger("meeting_scribe.gui").debug("視窗已關閉，略過工作「%s」的結果", title)
+
+        def progress(pct: float, msg: str) -> None:
+            emit(signals.progress, pct, msg)
+
+        def run() -> None:
             debug = logging.getLogger("meeting_scribe.gui")
             debug.debug("工作開始：%s", title)
             try:
-                result = work(self.signals.progress.emit, self._cancel.is_set)
+                result = work(progress, self._cancel.is_set)
             except Cancelled:
-                self.signals.cancelled.emit()
+                emit(signals.cancelled)
             except Exception as exc:  # noqa: BLE001 - 所有錯誤都要顯示給使用者
                 from meeting_scribe import diagnostics
 
                 diagnostics.log_exception(exc, title)  # 未預期的錯誤記下完整位置，方便回報
-                self.signals.failed.emit(diagnostics.describe(exc))
+                emit(signals.failed, diagnostics.describe(exc))
             else:
                 debug.debug("工作完成：%s（%.1f 秒）", title, time.monotonic() - self._started)
-                self.signals.succeeded.emit(result)
+                emit(signals.succeeded, result)
 
         threading.Thread(target=run, daemon=True).start()
 

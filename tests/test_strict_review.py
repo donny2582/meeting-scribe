@@ -176,3 +176,69 @@ def test_debug_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
     assert not diagnostics.debug_enabled({})
     monkeypatch.setenv("MEETINGSCRIBE_DEBUG", "1")
     assert diagnostics.debug_enabled({})
+
+# 背景工作還沒結束、視窗就被關閉：工作結束時不可以對已刪除的物件送訊號（RuntimeError: Signal source has been deleted）
+def test_background_work_finishing_after_panel_deleted() -> None:
+    import threading
+    import time
+
+    import shiboken6
+    from PySide6.QtWidgets import QApplication
+
+    from meeting_scribe.gui.widgets import RunPanel
+
+    app = QApplication.instance() or QApplication([])
+    errors: list[BaseException] = []
+    old_hook = threading.excepthook
+    threading.excepthook = lambda args: errors.append(args.exc_value)  # type: ignore[assignment]
+    try:
+        for outcome in ("ok", "fail"):
+            panel = RunPanel()
+
+            def work(progress: Any, cancel: Any, outcome: str = outcome) -> str:
+                time.sleep(0.3)
+                progress(50, "還在處理")
+                if outcome == "fail":
+                    raise ValueError("工作失敗")
+                return "完成"
+
+            panel.start("測試", work, lambda r: None)
+            shiboken6.delete(panel)  # 使用者在工作進行中關閉視窗
+            time.sleep(0.6)
+            app.processEvents()
+    finally:
+        threading.excepthook = old_hook
+    assert errors == [], f"背景執行緒發生錯誤：{errors}"
+
+# 開啟程式時的背景檢查新版本：查詢還沒回來、視窗就關閉了
+def test_update_check_finishing_after_window_closed(monkeypatch: pytest.MonkeyPatch) -> None:
+    import threading
+    import time
+
+    from PySide6.QtWidgets import QApplication
+
+    from meeting_scribe import updater
+    from meeting_scribe.gui.main_window import MainWindow
+
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(updater, "is_installed", lambda: True)
+    monkeypatch.setattr(updater, "list_releases", lambda cfg, include: time.sleep(0.3) or [])
+    errors: list[BaseException] = []
+    old_hook = threading.excepthook
+    threading.excepthook = lambda args: errors.append(args.exc_value)  # type: ignore[assignment]
+    try:
+        w = MainWindow(secret_store={"get_secret": lambda n: None, "set_secret": lambda n, v: None,
+                                     "delete_secret": lambda n: None})
+        w.version.check_in_background()
+        w.close()
+        w.deleteLater()
+        del w
+        import gc
+
+        gc.collect()
+        app.processEvents()
+        time.sleep(0.6)
+        app.processEvents()
+    finally:
+        threading.excepthook = old_hook
+    assert errors == [], f"背景執行緒發生錯誤：{errors}"

@@ -259,16 +259,24 @@ class VersionPage(QWidget):
     # ---- 開啟程式時檢查 ----
     def check_in_background(self) -> None:
         """一天一次在背景檢查新版本；有新版時只在狀態列與分頁名稱提醒。"""
+        import os
+
+        if os.environ.get("MEETINGSCRIBE_NO_UPDATE_CHECK"):  # 測試或離線環境不連網
+            return
         if not updater.is_installed() or not updater.should_check_today(self.host.cfg):
             return
         cfg, include = self.host.cfg, self.include_pre.isChecked()
+        signals = self._signals  # 執行緒自己持有訊號物件：視窗關閉後仍可安全結束
 
         def run() -> None:
             try:
                 result: Any = updater.list_releases(cfg, include)
             except Exception as exc:  # noqa: BLE001 - 背景檢查失敗不打擾使用者
                 result = exc
-            self._signals.checked.emit(result)
+            try:
+                signals.checked.emit(result)
+            except RuntimeError:  # 視窗已經關閉：不需要提醒
+                pass
 
         threading.Thread(target=run, daemon=True, name="檢查更新").start()
 
