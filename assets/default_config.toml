@@ -124,7 +124,8 @@ warn_ratio = 0.8                # 用到上限的 80% 時提醒
 [update]
 # 「版本」分頁：從 GitHub Releases 更新或切換版本
 repo = "donny2582/meeting-scribe"   # 官方儲存庫（公開，不需要金鑰）
-min_version = "0.5.4"               # 這個版本以後才有更新功能，更早的版本不提供切換
+min_version = "0.5.4"               # 列出這個版本以後的版本（更早的版本不提供切換）
+self_update_since = "0.5.5"         # 從這個版本開始才有「版本」分頁；退回更舊的版本時會提醒之後要手動更新
 check_on_startup = true             # 開啟程式時檢查有沒有新版（一天最多一次，只提醒、不會自動安裝）
 include_prerelease = false          # 是否列出預覽版
 last_check = ""                     # 上次自動檢查的日期（程式自動記錄）

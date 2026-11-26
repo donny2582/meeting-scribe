@@ -201,8 +201,15 @@ class VersionPage(QWidget):
             return
         newer = rel.key > updater.parse_version(updater.current_version())
         action = "更新" if newer else "退回"
-        extra = "" if newer else ("\n\n退回舊版後，新版本才有的功能就不能使用；"
-                                  "用新版存的文件仍可開啟（新版多出的資料會被略過）。之後可以再到「版本」分頁更新。")
+        since = updater.parse_version(str(self.host.cfg.get("update", {}).get("self_update_since", "0.5.5")))
+        if newer:
+            extra = ""
+        elif rel.key < since:
+            extra = (f"\n\n⚠ {rel.version} 還沒有「版本」分頁：退回後就不能在程式裡更新，"
+                     "之後要更新請到 GitHub Releases 網頁手動下載新版安裝檔。")
+        else:
+            extra = ("\n\n退回舊版後，新版本才有的功能就不能使用；"
+                     "用新版存的文件仍可開啟（新版多出的資料會被略過）。之後可以再到「版本」分頁更新。")
         answer = QMessageBox.question(
             self, f"{action}到 {rel.version}",
             f"要{action}到 {rel.version} 嗎？\n\n"
