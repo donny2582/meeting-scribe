@@ -84,6 +84,68 @@ def _check_ffmpeg(work: Path) -> str:
     return f"{ffmpeg}（轉出 {info.duration:.1f} 秒 FLAC）"
 
 
+def _check_formats(work: Path) -> str:
+    """常見錄音與影片格式都能轉檔；沒有聲音的檔案會在送出前擋下。"""
+    from meeting_scribe.audio.preprocess import AudioError, find_ffmpeg, preprocess_audio
+
+    ffmpeg = find_ffmpeg()
+    no_window = 0x08000000 if sys.platform == "win32" else 0
+    tone = ["-f", "lavfi", "-i", "sine=frequency=440:duration=3"]
+    video = ["-f", "lavfi", "-i", "color=c=blue:s=160x120:d=3"]
+    cases = {
+        "aac": tone + ["-c:a", "aac", "-f", "adts"],
+        "wma": tone + ["-c:a", "wmav2"],
+        "amr": tone + ["-ar", "8000", "-c:a", "libopencore_amrnb", "-b:a", "12.2k"],
+        "ogg": tone + ["-c:a", "libvorbis"],
+        "mov": video + tone + ["-c:a", "aac", "-shortest"],
+    }
+    passed = []
+    for ext, args in cases.items():
+        src = work / f"格式測試.{ext}"
+        subprocess.run([str(ffmpeg), "-hide_banner", "-nostdin", "-y", "-loglevel", "error", *args, str(src)],
+                       capture_output=True, check=True, creationflags=no_window)
+        info = preprocess_audio(src, work / f"格式測試_{ext}.flac", ffmpeg, clip=(0.5, 2.5))
+        if not 1.5 <= info.duration <= 2.5:
+            raise RuntimeError(f".{ext} 轉檔後長度不正確：{info.duration:.2f} 秒")
+        passed.append(ext)
+    silent = work / "只有影像.mp4"
+    subprocess.run([str(ffmpeg), "-hide_banner", "-nostdin", "-y", "-loglevel", "error", *video, "-c:v", "mpeg4",
+                    str(silent)], capture_output=True, check=True, creationflags=no_window)
+    try:
+        preprocess_audio(silent, work / "silent.flac", ffmpeg)
+    except AudioError:
+        pass
+    else:
+        raise RuntimeError("沒有聲音的影片沒有被擋下")
+    return "、".join(passed) + " 都能轉檔；沒有聲音的檔案會擋下"
+
+
+def _check_undo(work: Path) -> str:
+    """逐字稿修改可以復原；還原原本內容在存檔、重新開啟後仍有效。"""
+    from meeting_scribe.models import RawSegment
+    from meeting_scribe.transcript_io import EditHistory, TranscriptDocument
+
+    segments = [RawSegment(start=i * 5, end=i * 5 + 3, speaker=f"講者{i + 1}", text=f"第{i + 1}段") for i in range(3)]
+    doc = TranscriptDocument(source="自我檢查", folder=str(work / "undo"), segments=segments)
+    original = [(s.speaker, s.text) for s in doc.segments]
+    history = EditHistory()
+    history.record(doc, "講者命名")
+    doc.rename_speaker("講者3", "公路局")
+    history.record(doc, "合併講者")
+    doc.merge_speaker("講者2", "講者1")
+    history.record(doc, "修改內容")
+    doc.segments[0] = doc.segments[0].model_copy(update={"text": "改錯"})
+    if history.undo(doc) != "修改內容" or doc.segments[0].text != "第1段":
+        raise RuntimeError("復原修改內容失敗")
+    if history.undo(doc) != "合併講者" or doc.segments[1].speaker != "講者2":
+        raise RuntimeError("復原合併講者失敗")
+    reopened = TranscriptDocument.load(doc.save())
+    if not reopened.restore_original() or [(s.speaker, s.text) for s in reopened.segments] != original \
+            or reopened.speaker_names:
+        raise RuntimeError("還原原本內容失敗")
+    return "復原、還原原本內容（含存檔後重新開啟）正常"
+
+
 def _check_documents(work: Path, out: Path) -> str:
     import docx
 
@@ -127,6 +189,10 @@ def _check_gui() -> str:
     app = QApplication.instance() or QApplication([])
     win = MainWindow()
     tabs = win.findChildren(type(win.centralWidget()))
+    page = win.document
+    for name in ("undo_button", "restore_button"):
+        if not hasattr(page, name):
+            raise RuntimeError(f"「產出文件」分頁缺少按鈕：{name}")
     player = QMediaPlayer()
     del player
     win.close()
@@ -150,6 +216,8 @@ def run_selftest(out: Path, log: Callable[[str], None] = print) -> int:
             ("金鑰保存（Windows 認證管理員）", _check_keyring),
             ("繁簡轉換（OpenCC）", _check_opencc),
             ("ffmpeg 音訊轉檔", lambda: _check_ffmpeg(work)),
+            ("多種音檔格式", lambda: _check_formats(work)),
+            ("復原與還原原本內容", lambda: _check_undo(work)),
             ("匯入逐字稿 → 刪除贅字 → 產出文件", lambda: _check_documents(work, out)),
             ("圖形介面", _check_gui),
         ]

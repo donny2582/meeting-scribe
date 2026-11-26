@@ -5,7 +5,7 @@
 
 ## 下載安裝
 
-**[⬇ 下載安裝檔 MeetingScribe_Setup_0.5.3.exe](https://github.com/donny2582/meeting-scribe/releases/download/v0.5.3/MeetingScribe_Setup_0.5.3.exe)**
+**[⬇ 下載安裝檔 MeetingScribe_Setup_0.5.4.exe](https://github.com/donny2582/meeting-scribe/releases/download/v0.5.4/MeetingScribe_Setup_0.5.4.exe)**
 （約 122 MB，Windows 10／11 64 位元）　｜　[所有版本（Releases）](https://github.com/donny2582/meeting-scribe/releases)
 
 1. 雙擊安裝檔。預設只裝給目前使用者，**不需要系統管理員權限**。
@@ -13,7 +13,7 @@
 2. 從開始功能表或桌面開啟「**MeetingScribe 會議紀錄**」。
 3. 到「**API 金鑰**」分頁設定金鑰（見下一節）。
 
-> 0.5.3 為預覽版：已在開發電腦驗證安裝、執行與解除安裝，尚未在全新 Windows 上驗證。
+> 0.5.4 為預覽版：已在開發電腦驗證安裝、執行與解除安裝，尚未在全新 Windows 上驗證。
 
 ## 需要的 API 金鑰
 
@@ -60,7 +60,7 @@
 | 2 | 摘要 | 🔧 程式完成，已用真實會議試跑 |
 | 3 | 輸出渲染 | 🔧 程式完成，已用 Word 開啟驗證；XMind 待以 XMind 軟體確認 |
 | 4 | GUI | 🔧 整合式主視窗已完成（轉錄、產出文件、引擎評估、詞庫、API 金鑰） |
-| 5 | 打包 | 🔧 安裝檔完成並發佈 v0.5.3（預覽版）；乾淨 Windows 驗證待執行 |
+| 5 | 打包 | 🔧 安裝檔完成並發佈 v0.5.4（預覽版）；乾淨 Windows 驗證待執行 |
 | 6 | 使用回饋調整 | 尚未開始 |
 
 ## 開發環境
