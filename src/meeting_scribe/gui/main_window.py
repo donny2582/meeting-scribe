@@ -34,6 +34,7 @@ from meeting_scribe.gui.document_page import DocumentPage
 from meeting_scribe.gui.icon import make_pixmap
 from meeting_scribe.gui.pages import BenchmarkPage, GlossaryPage, TranscribePage
 from meeting_scribe.gui.settings import KeysPage
+from meeting_scribe.gui.version_page import VersionPage
 from meeting_scribe.gui.widgets import APP_STYLE, open_path, primary_button
 from meeting_scribe.postprocess.lang_detect import LanguageRegistry
 
@@ -87,6 +88,7 @@ class MainWindow(QMainWindow):
         self.keys.keys_changed.connect(self.engines_changed)
         self.keys.llm_changed.connect(lambda _c: self.engines_changed())
         self.keys.stt_changed.connect(self._stt_from_keys)
+        self.version = VersionPage(self)
 
         self.tabs = QTabWidget()
         self._pages = {
@@ -95,6 +97,7 @@ class MainWindow(QMainWindow):
             "benchmark": (self.benchmark, "引擎評估"),
             "glossary": (self.glossary, "詞庫"),
             "keys": (self.keys, "API 金鑰"),
+            "version": (self.version, "版本"),
         }
         for page, label in self._pages.values():
             self.tabs.addTab(page, label)
@@ -103,6 +106,7 @@ class MainWindow(QMainWindow):
         self.tabs.setTabToolTip(0, "把錄音檔轉成逐字稿")
         self.tabs.setTabToolTip(1, "修正逐字稿、填寫會議資訊、產出文件（也可以匯入已經有的逐字稿）")
         self.tabs.setTabToolTip(2, "第 0 階段：比較語音轉文字引擎，決定預設引擎")
+        self.tabs.setTabToolTip(5, "從 GitHub 更新到新版，或退回 0.5.4 以後的版本")
 
         bottom = QHBoxLayout()
         tools = [
@@ -136,6 +140,9 @@ class MainWindow(QMainWindow):
             page.panel.busy_changed.connect(self._set_busy)
         self.engines_changed()
         self._first_tab()
+        from PySide6.QtCore import QTimer
+
+        QTimer.singleShot(3000, self.version.check_in_background)  # 開啟後 3 秒在背景檢查新版（一天一次）
 
     # ---- 給分頁使用的功能 ----
     def go_to(self, page: str) -> None:

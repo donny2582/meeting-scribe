@@ -86,5 +86,10 @@ if (-not $SkipInstaller) {
     & $iscc "/DAppVersion=$version" "/DRoot=$Root" (Join-Path $Root 'installer\meeting_scribe.iss')
     if ($LASTEXITCODE -ne 0) { throw 'Inno Setup 產生安裝檔失敗' }
     $setup = Get-ChildItem (Join-Path $dist 'installer') -Filter "MeetingScribe_Setup_$version.exe" | Select-Object -First 1
+    # 檢查碼：「版本」分頁下載後比對，一致才安裝（發佈 Release 時要一起上傳）
+    $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $setup.FullName).Hash.ToLower()
+    $sumFile = "$($setup.FullName).sha256"
+    [IO.File]::WriteAllText($sumFile, "$hash  $($setup.Name)`n", (New-Object Text.UTF8Encoding $false))
     Write-Host ("安裝檔：{0}（{1:N0} MB）" -f $setup.FullName, ($setup.Length / 1MB)) -ForegroundColor Green
+    Write-Host "檢查碼：$sumFile" -ForegroundColor Green
 }
