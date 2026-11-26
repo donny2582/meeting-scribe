@@ -134,7 +134,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("show-keys", help="檢視已設定的金鑰（只顯示末 4 碼）").set_defaults(func=cmd_show_keys)
 
     def common(sp: argparse.ArgumentParser) -> None:
-        sp.add_argument("--audio", required=True, help="錄音檔（mp3、m4a、wav、mp4）")
+        sp.add_argument("--audio", required=True, help="錄音檔（mp3、m4a、aac、wav、wma、flac、ogg、opus、amr、影片等，ffmpeg 能讀的格式都可以）")
         sp.add_argument("--languages", nargs="+", help="會議語言代碼，例：zh en ja（預設依設定檔）")
         sp.add_argument("--glossary", nargs="+", help="詞庫 CSV（預設使用者詞庫資料夾下全部）")
 

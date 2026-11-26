@@ -28,7 +28,17 @@ from PySide6.QtWidgets import (
 
 from meeting_scribe.postprocess.lang_detect import LanguageRegistry
 
-AUDIO_FILTER = "錄音檔 (*.mp3 *.m4a *.wav *.mp4 *.flac);;所有檔案 (*.*)"
+
+def _audio_filter() -> str:
+    from meeting_scribe.audio.preprocess import AUDIO_EXTENSIONS, VIDEO_EXTENSIONS
+
+    audio = " ".join(f"*{e}" for e in AUDIO_EXTENSIONS)
+    video = " ".join(f"*{e}" for e in VIDEO_EXTENSIONS)
+    return (f"錄音與影片 ({audio} {video});;錄音檔 ({audio});;影片（只取聲音） ({video});;"
+            "所有檔案（其他格式也會嘗試讀取） (*.*)")
+
+
+AUDIO_FILTER = _audio_filter()
 CSV_FILTER = "CSV 檔 (*.csv);;所有檔案 (*.*)"
 
 #: 主要按鈕（藍底白字）與共用樣式

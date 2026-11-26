@@ -116,7 +116,8 @@ def test_preprocess_uses_clip(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -
 
     class Proc:
         returncode = 0
-        stderr = b"Duration: 00:00:10.00,"
+        stderr = (b"Input #0, mov,mp4,m4a, from \x27a.m4a\x27:\n  Duration: 00:00:10.00, start: 0.000000\n"
+                  b"  Stream #0:0[0x1](und): Audio: aac (LC), 44100 Hz, stereo\n")  # 實際 ffmpeg 的輸出格式
 
     def run(cmd: list[str]) -> Proc:
         cmds.append(cmd)

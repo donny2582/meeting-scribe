@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
 )
 
 from meeting_scribe import tasks
+from meeting_scribe.audio.preprocess import SUPPORTED_DESCRIPTION
 from meeting_scribe.config import default_glossary_names, user_glossary_dir
 from meeting_scribe.gui.audio_range import AudioRangePicker, hms
 from meeting_scribe.gui.settings import ENGINES
@@ -129,7 +130,7 @@ class TranscribePage(QWidget):
         box = QGroupBox("1. 錄音檔")
         v = QVBoxLayout(box)
         self.audio = FilePicker("open", AUDIO_FILTER, "選擇錄音檔，或直接把檔案拖到這裡", "選擇錄音檔")
-        self.audio_info = hint("支援 mp3、m4a、wav、mp4（只取音軌）。")
+        self.audio_info = hint(f"支援 {SUPPORTED_DESCRIPTION}。")
         self.audio.changed.connect(self._update_audio_info)
         v.addWidget(self.audio)
         v.addWidget(self.audio_info)
@@ -211,7 +212,7 @@ class TranscribePage(QWidget):
             if path != self.range_picker.path:
                 self.range_picker.load(path)
         else:
-            self.audio_info.setText("支援 mp3、m4a、wav、mp4（只取音軌）。")
+            self.audio_info.setText(f"支援 {SUPPORTED_DESCRIPTION}。")
             self.range_picker.load(None)
 
     def selected_engines(self) -> list[str]:

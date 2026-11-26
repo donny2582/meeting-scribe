@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QPointF, QRectF, Qt, QTime, QUrl, Signal
+from PySide6.QtCore import QPointF, QRectF, Qt, QTime, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QBrush,
     QColor,
@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
 )
 
 MIN_SPAN = 1.0  # 範圍至少 1 秒
+FALLBACK_MS = 5000  # 播放器 5 秒內讀不出長度時改用 ffmpeg
 HANDLE_W = 12
 
 
@@ -262,7 +263,6 @@ class AudioRangePicker(QWidget):
         try:
             from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
         except ImportError:
-            self.status.setText("這台電腦無法使用試聽功能；仍可以輸入起點與終點時間。")
             return False
         self.player = QMediaPlayer(self)
         self._audio_out = QAudioOutput(self)
@@ -270,7 +270,7 @@ class AudioRangePicker(QWidget):
         self.player.durationChanged.connect(lambda ms: self.set_duration(ms / 1000) if ms > 0 else None)
         self.player.positionChanged.connect(self._on_position)
         self.player.playbackStateChanged.connect(self._on_state)
-        self.player.errorOccurred.connect(lambda _e, msg: self.status.setText(f"無法播放：{msg}"))
+        self.player.errorOccurred.connect(lambda _e, msg: self._fallback(msg))
         return True
 
     def load(self, path: Path | None) -> None:
@@ -282,8 +282,34 @@ class AudioRangePicker(QWidget):
             self.status.setText("")
             return
         self.status.setText("讀取錄音長度中…")
+        self._playable = True
         if self._ensure_player():
             self.player.setSource(QUrl.fromLocalFile(str(path)))  # type: ignore[union-attr]
+            # 播放器讀不出長度（例如 amr、wma 等少見格式）時，改用 ffmpeg 讀取
+            QTimer.singleShot(FALLBACK_MS, lambda p=path: p == self.path and self.slider.duration <= 0
+                              and self._fallback("播放器無法讀取這個格式"))
+        else:
+            self._fallback("這台電腦無法使用試聽功能")
+
+    def _fallback(self, reason: str) -> None:
+        """無法試聽時：用 ffmpeg 讀取長度，仍可設定範圍並轉錄（只是不能播放）。"""
+        path = self.path
+        if path is None or not path.is_file():
+            return
+        self._playable = False
+        self.stop()
+        if self.slider.duration <= 0:
+            from meeting_scribe.audio.preprocess import AudioError, find_ffmpeg, probe_duration
+
+            try:
+                duration = probe_duration(path, find_ffmpeg())
+            except AudioError as exc:
+                self.status.setText(str(exc).splitlines()[0])
+                return
+            self.set_duration(duration)
+        for w in (self.play_button, self.stop_button):
+            w.setEnabled(False)
+        self.status.setText(f"這個格式無法試聽（{reason}），但可以轉錄；拖曳藍色把手或輸入時間設定範圍。")
 
     def set_duration(self, duration: float) -> None:
         """設定錄音長度並把範圍重設為全部。"""
@@ -297,8 +323,9 @@ class AudioRangePicker(QWidget):
             self.range_changed.emit(self.slider.start, self.slider.end)
 
     def _set_ready(self, ready: bool) -> None:
+        playable = getattr(self, "_playable", True)
         for w in (self.to_start, self.play_button, self.stop_button, self.to_end, self.start_edit, self.end_edit):
-            w.setEnabled(ready)
+            w.setEnabled(ready and (playable or w in (self.start_edit, self.end_edit)))
         self._update_labels()
 
     # ---- 範圍 ----
