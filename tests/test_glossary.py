@@ -5,11 +5,11 @@ from pathlib import Path
 from meeting_scribe.config import assets_dir
 from meeting_scribe.postprocess.glossary import (
     GlossaryEntry,
-    apply_corrections,
     load_glossaries,
     load_glossary,
     stt_phrases,
 )
+from meeting_scribe.postprocess.semantic import glossary_fix
 
 
 def test_seed_glossary_loads() -> None:
@@ -33,18 +33,19 @@ def test_phrases_priority_and_limit() -> None:
 
 
 def test_corrections_longest_first() -> None:
+    """詞庫「常見誤寫」取代（AI 校正使用的 glossary_fix）：最長的誤寫優先，並記下取代了什麼。"""
     entries = [
         GlossaryEntry("路政及道安司", ["路政及道安四", "路正及道安司"]),
         GlossaryEntry("道安", ["到安"]),
     ]
-    assert apply_corrections("請路正及道安司與路政及道安四協助到安業務", entries) == (
-        "請路政及道安司與路政及道安司協助道安業務"
-    )
+    text, used = glossary_fix("請路正及道安司與路政及道安四協助到安業務", entries)
+    assert text == "請路政及道安司與路政及道安司協助道安業務"
+    assert used == ["路正及道安司→路政及道安司", "路政及道安四→路政及道安司", "到安→道安"]
 
 
 def test_corrections_no_fuzzy() -> None:
     entries = [GlossaryEntry("公路局", ["工路局"])]
-    assert apply_corrections("公路總局", entries) == "公路總局"
+    assert glossary_fix("公路總局", entries) == ("公路總局", [])  # 不做模糊比對
 
 
 def test_merge_multiple(tmp_path: Path) -> None:

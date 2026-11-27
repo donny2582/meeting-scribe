@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any
 
 from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtWidgets import (
@@ -26,16 +26,6 @@ from PySide6.QtWidgets import (
 
 from meeting_scribe import updater
 from meeting_scribe.gui.widgets import OK_COLOR, RunPanel, hint, open_path, primary_button
-
-
-class VersionHost(Protocol):
-    """主視窗提供給本分頁的功能。"""
-
-    cfg: dict[str, Any]
-
-    def busy(self) -> bool: ...
-    def statusBar(self) -> Any: ...
-    def save_settings(self, quiet: bool = False) -> bool: ...
 
 
 class _Signals(QObject):

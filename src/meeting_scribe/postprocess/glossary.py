@@ -85,24 +85,4 @@ def stt_phrases(entries: list[GlossaryEntry], languages: Iterable[str], limit: i
     return phrases[:limit] if limit else phrases
 
 
-def apply_corrections(text: str, entries: list[GlossaryEntry]) -> str:
-    """依「常見誤寫 → 正確詞」取代；最長的誤寫優先比對，不做模糊比對。"""
-    pairs = sorted(
-        ((m, e.term) for e in entries for m in e.misspellings if m and m != e.term),
-        key=lambda p: len(p[0]),
-        reverse=True,
-    )
-    if not pairs:
-        return text
-    out: list[str] = []
-    i = 0
-    while i < len(text):
-        for wrong, right in pairs:
-            if text.startswith(wrong, i):
-                out.append(right)
-                i += len(wrong)
-                break
-        else:
-            out.append(text[i])
-            i += 1
-    return "".join(out)
+# 「常見誤寫 → 正確詞」的取代在 postprocess/semantic.py 的 glossary_fix（AI 校正使用，會記下取代了什麼）。
