@@ -195,3 +195,30 @@ def test_background_check_marks_new_version(win: Any, monkeypatch: pytest.Monkey
     assert "版本（有新版）" in win.tabs.tabText(win.tabs.count() - 1)
     assert win.cfg["update"]["last_check"] == datetime.now().strftime("%Y-%m-%d")  # 今天不會再自動檢查
     page._background_checked(updater.UpdateError("連不上"))  # 失敗時不打擾使用者
+
+
+def test_launch_installer_runner_actually_runs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """0.5.5 的問題：用 DETACHED_PROCESS＋-WindowStyle Hidden 啟動 PowerShell 會直接結束，安裝程式不會執行。"""
+    import subprocess
+    import sys
+    import time
+
+    calls: list[dict] = []
+    monkeypatch.setattr(updater.subprocess, "Popen", lambda args, **kw: calls.append({"args": args, **kw}))
+    updater.launch_installer(tmp_path / "setup.exe")
+    flags, args = calls[0]["creationflags"], calls[0]["args"]
+    assert not flags & 0x00000008 and "-WindowStyle" not in args  # 不可 DETACHED、不可 Hidden
+    assert flags & updater.CREATE_NO_WINDOW
+    if sys.platform != "win32":
+        return
+    mark = tmp_path / "ran.txt"  # 實際用同樣的方式啟動 PowerShell，確認真的會執行
+    env = dict(calls[0]["env"], MS_SETUP="cmd.exe", MS_ARGS=f"/c|echo ok > \"{mark}\"", MS_APP="cmd.exe")
+    monkeypatch.undo()
+    subprocess.Popen(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command",
+                      updater._RUNNER.replace("Start-Process -FilePath $env:MS_APP", "")],
+                     env=env, creationflags=flags)
+    for _ in range(40):
+        if mark.exists():
+            break
+        time.sleep(0.25)
+    assert mark.exists()

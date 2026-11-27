@@ -125,7 +125,7 @@ def test_debug_mode_logs_details_without_transcript(_restore_logging: Any, monke
     secret = "主席裁示毒駕防制修法今年底完成"  # 逐字稿內容：不可以出現在日誌
     path = diagnostics.setup_logging(verbose=False, console=False)
     diagnostics.apply_debug(True)
-    assert logging.getLogger().isEnabledFor(logging.DEBUG)
+    assert diagnostics.is_debug()
 
     def post(url: str, json: dict, headers: dict, timeout: Any) -> httpx.Response:
         body = {"model": "gpt-6.2-sol", "usage": {"prompt_tokens": 10, "completion_tokens": 5},
@@ -144,12 +144,12 @@ def test_debug_mode_logs_details_without_transcript(_restore_logging: Any, monke
     text = path.read_text(encoding="utf-8")
     assert "除錯模式：開啟" in text and "OpenAI 呼叫開始：工作=correct" in text and "OpenAI 回應：HTTP 200" in text
     assert secret not in text and "sk-test" not in text  # 不記錄逐字稿內容與金鑰
+    assert "httpcore" not in text  # 第三方套件的連線細節不記錄（會淹沒有用的資訊）
     diagnostics.apply_debug(False)
-    assert not logging.getLogger().isEnabledFor(logging.DEBUG)
+    assert not diagnostics.is_debug()
 
 
 def test_debug_toggle_in_version_tab(_restore_logging: Any) -> None:
-    import logging
 
     from PySide6.QtWidgets import QApplication
 
@@ -162,7 +162,7 @@ def test_debug_toggle_in_version_tab(_restore_logging: Any) -> None:
                                  "delete_secret": lambda n: None})
     assert not w.version.debug.isChecked()
     w.version.debug.setChecked(True)
-    assert logging.getLogger().isEnabledFor(logging.DEBUG) and w.cfg["general"]["debug"] is True
+    assert diagnostics.is_debug() and w.cfg["general"]["debug"] is True
     assert "除錯模式：開啟" in "\n".join(diagnostics.system_info())
     w.version.debug.setChecked(False)
     assert w.cfg["general"]["debug"] is False

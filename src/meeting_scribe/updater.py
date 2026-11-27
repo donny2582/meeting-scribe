@@ -32,6 +32,8 @@ API = "https://api.github.com"
 USER_AGENT = "MeetingScribe-updater"  # 不帶任何使用者資訊
 INSTALLER_RE = re.compile(r"^MeetingScribe_Setup_(\d+(?:\.\d+)*)\.exe$")
 ProgressFn = Callable[[float, str], None]
+CREATE_NO_WINDOW = 0x08000000
+CREATE_NEW_PROCESS_GROUP = 0x00000200
 
 
 class UpdateError(Exception):
@@ -232,9 +234,11 @@ def launch_installer(installer: Path) -> None:
     """在背景啟動安裝（程式要隨後自行結束）：等安裝完成後自動重新開啟程式。"""
     args = ["/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS", *install_scope_args()]
     env = dict(os.environ, MS_SETUP=str(installer), MS_ARGS="|".join(args), MS_APP=str(Path(sys.executable)))
+    # 注意：不可加 DETACHED_PROCESS 或 -WindowStyle Hidden——PowerShell 沒有主控台時會直接結束、安裝程式不會執行
+    #（0.5.5 的問題）。CREATE_NO_WINDOW 會給一個看不見的主控台；CREATE_NEW_PROCESS_GROUP 讓程式結束後仍繼續執行。
     subprocess.Popen(
-        ["powershell.exe", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", _RUNNER],
-        env=env, creationflags=0x08000000 | 0x00000008,  # CREATE_NO_WINDOW | DETACHED_PROCESS
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", _RUNNER],
+        env=env, creationflags=CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP,
     )
     log.info("啟動安裝：%s %s", installer.name, " ".join(args))
 

@@ -65,8 +65,8 @@ def setup_logging(verbose: bool = False, console: bool = True) -> Path:
     for old in root.handlers:
         old.close()
     root.handlers[:] = handlers
-    root.setLevel(logging.DEBUG if verbose else logging.INFO)
-    logging.getLogger("httpx").setLevel(logging.WARNING)
+    root.setLevel(logging.INFO)
+    _set_app_debug(verbose)
     log.info("===== %s %s 啟動（%s）｜%s｜Python %s =====", APP_NAME, app_version(), edition(),
              platform.platform(), platform.python_version())
     return path
@@ -82,10 +82,20 @@ def debug_enabled(cfg: dict[str, Any] | None = None) -> bool:
     return bool((cfg or {}).get("general", {}).get("debug", False))
 
 
+def _set_app_debug(on: bool) -> None:
+    """只有本程式（meeting_scribe）的紀錄改成 DEBUG；第三方套件（httpcore、keyring…）的細節會淹沒有用的資訊，不記錄。"""
+    logging.getLogger("meeting_scribe").setLevel(logging.DEBUG if on else logging.NOTSET)
+    for name in ("httpx", "httpcore", "keyring", "win32ctypes", "PIL", "urllib3", "asyncio"):
+        logging.getLogger(name).setLevel(logging.WARNING)
+
+
+def is_debug() -> bool:
+    return logging.getLogger("meeting_scribe").isEnabledFor(logging.DEBUG)
+
+
 def apply_debug(on: bool) -> None:
     """立即切換日誌詳細程度（不必重新開啟程式）。"""
-    logging.getLogger().setLevel(logging.DEBUG if on else logging.INFO)
-    logging.getLogger("httpx").setLevel(logging.WARNING)  # 第三方套件的細節不需要
+    _set_app_debug(on)
     log.info("除錯模式：%s", "開啟（日誌會記錄詳細的處理過程，不含逐字稿內容）" if on else "關閉")
 
 
@@ -201,7 +211,7 @@ def system_info() -> list[str]:
         f"執行檔：{sys.executable}",
         f"Windows：{platform.platform()}",
         f"Python：{platform.python_version()}",
-        f"除錯模式：{'開啟' if logging.getLogger().isEnabledFor(logging.DEBUG) else '關閉'}",
+        f"除錯模式：{'開啟' if is_debug() else '關閉'}",
         f"產生時間：{datetime.now():%Y-%m-%d %H:%M:%S}",
     ]
     try:
