@@ -184,7 +184,7 @@ def test_install_flow_downloads_then_launches(win: Any, monkeypatch: pytest.Monk
         if not page.panel.running:
             break
     assert asked and "退回到 0.5.4" in asked[0] and "設定、API 金鑰與會議資料都會保留" in asked[0]
-    assert "還沒有「版本」分頁" in asked[0]  # 0.5.4 沒有更新功能 → 提醒之後要手動更新
+    assert "還不能在程式裡更新" in asked[0]  # 0.5.4 沒有更新功能 → 提醒之後要手動更新
     assert launched == [installer] and quits == [True]
 
 
